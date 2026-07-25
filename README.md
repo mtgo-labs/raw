@@ -15,7 +15,7 @@ user, _ := raw.Invoke(ctx, client, &tl.UsersGetUsersRequest{
 
 ## Features
 
-- Full MTProto 2.0 protocol: encrypted transport, auth key negotiation, session management
+- Full MTProto 2.0: encrypted transport, auth key negotiation, sessions
 - Zero-allocation AES-256-IGE encryption
 - Compile-time typed TL schema with generated encode/decode (layer 228)
 - Intermediate, abridged, padded, and obfuscated transports
