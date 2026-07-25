@@ -8,7 +8,6 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
-	"strings"
 
 	"github.com/mtgo-labs/raw/cmd/tlgen/internal/naming"
 	"github.com/mtgo-labs/raw/cmd/tlgen/internal/schema"
@@ -191,15 +190,6 @@ func header(flavor naming.Flavor, metadata Metadata) []byte {
 		source,
 		metadata.Layer,
 	)
-}
-
-func groupCommit(value string) string {
-	groups := make([]string, 0, len(value)/8)
-	for len(value) > 0 {
-		groups = append(groups, value[:8])
-		value = value[8:]
-	}
-	return strings.Join(groups, " ")
 }
 
 func layerDecl(layer int) ast.Decl {

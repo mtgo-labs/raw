@@ -1,0 +1,60 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: "Git ref to compare against (branch, tag, or commit)"
+        required: false
+        default: "main"
+      count:
+        description: "Benchmark iterations"
+        required: false
+        default: "10"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.x
+          cache: true
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: Run benchmarks on HEAD
+        run: |
+          go test -run '^$' -bench . -benchmem -count=${{ inputs.count }} ./... | tee /tmp/bench-head.txt
+
+      - name: Run benchmarks on baseline (${{ inputs.baseline }})
+        run: |
+          git worktree add /tmp/baseline "${{ inputs.baseline }}"
+          cd /tmp/baseline
+          go test -run '^$' -bench . -benchmem -count=${{ inputs.count }} ./... | tee /tmp/bench-baseline.txt
+
+      - name: Compare
+        run: |
+          echo "## Benchmark comparison: HEAD vs ${{ inputs.baseline }}" > /tmp/bench-summary.md
+          echo '```' >> /tmp/bench-summary.md
+          benchstat /tmp/bench-baseline.txt /tmp/bench-head.txt >> /tmp/bench-summary.md || true
+          echo '```' >> /tmp/bench-summary.md
+          cat /tmp/bench-summary.md
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@cc7b4155722d20973c0211ea7c10ae9a7facbdcb # v6.0.0
+        with:
+          name: benchmark-results
+          path: |
+            /tmp/bench-head.txt
+            /tmp/bench-baseline.txt
+            /tmp/bench-summary.md

@@ -132,18 +132,18 @@ type Config struct {
 	SessionStringKey []byte
 	TestMode         bool
 	// InMemory uses an in-memory session store when Store is not set.
-	InMemory          bool
-	Transport         TransportKind
-	Obfuscate         bool
-	Proxy             ProxyConfig
-	Store             session.Store
-	Logger            *slog.Logger
-	PendingCapacity   int
-	MaxPayload        int
-	UpdateBuffer      int
+	InMemory        bool
+	Transport       TransportKind
+	Obfuscate       bool
+	Proxy           ProxyConfig
+	Store           session.Store
+	Logger          *slog.Logger
+	PendingCapacity int
+	MaxPayload      int
+	UpdateBuffer    int
 	// NoUpdates disables update collection. When true, the Updates channel
 	// is nil and inbound updates are silently discarded.
-	NoUpdates bool
+	NoUpdates         bool
 	PoolSize          int
 	PoolIdleTimeout   time.Duration
 	Retry             RetryPolicy

@@ -235,8 +235,10 @@ func TestClientExportSessionStringRejectsMissingOrCorruptState(t *testing.T) {
 	if _, err := client.ExportSessionString(context.Background(), bytes.Repeat([]byte{1}, 32)); !errors.Is(err, ErrNoAuthKey) {
 		t.Fatalf("missing key err=%v", err)
 	}
-	if _, err := client.ExportSessionString(nil, bytes.Repeat([]byte{1}, 32)); !errors.Is(err, context.Canceled) {
-		t.Fatalf("nil context err=%v", err)
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := client.ExportSessionString(canceledCtx, bytes.Repeat([]byte{1}, 32)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context err=%v", err)
 	}
 	_ = client.Close()
 
