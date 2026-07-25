@@ -2,6 +2,7 @@ package raw
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"strconv"
@@ -159,44 +160,65 @@ type Config struct {
 }
 
 func (config Config) validate() error {
-	if config.APIID <= 0 || config.Address == "" {
-		return ErrInvalidConfig
+	if config.APIID <= 0 {
+		return fmt.Errorf("%w: api_id is %d (must be > 0)", ErrInvalidConfig, config.APIID)
+	}
+	if config.Address == "" {
+		return fmt.Errorf("%w: address is empty (must be set)", ErrInvalidConfig)
 	}
 	if config.DCID < 0 || config.DCID > int(^uint32(0)>>1) {
-		return ErrInvalidConfig
+		return fmt.Errorf("%w: dc_id %d is invalid", ErrInvalidConfig, config.DCID)
 	}
-	if config.Transport > TransportPaddedIntermediate ||
-		config.Proxy.Kind > ProxySOCKS5 ||
-		(config.Proxy.Kind == ProxyHTTPConnect || config.Proxy.Kind == ProxySOCKS5) && !validAddress(config.Proxy.Address) ||
-		config.PendingCapacity < 0 ||
-		config.MaxPayload < 0 ||
-		config.UpdateBuffer < 0 ||
-		config.PoolSize < 0 ||
-		config.PoolIdleTimeout < 0 ||
-		config.Retry.MaxAttempts < 0 ||
-		config.Retry.MaxFloodWait < 0 ||
-		config.Reconnect.MaxAttempts < 0 ||
-		config.Reconnect.InitialDelay < 0 ||
-		config.Reconnect.MaxDelay < 0 ||
-		config.Liveness.PingInterval < 0 ||
-		config.Liveness.PongTimeout < 0 {
-		return ErrInvalidConfig
+	if config.Transport > TransportPaddedIntermediate {
+		return fmt.Errorf("%w: transport %d is invalid", ErrInvalidConfig, config.Transport)
+	}
+	if config.Proxy.Kind > ProxySOCKS5 {
+		return fmt.Errorf("%w: proxy kind %d is invalid", ErrInvalidConfig, config.Proxy.Kind)
+	}
+	if (config.Proxy.Kind == ProxyHTTPConnect || config.Proxy.Kind == ProxySOCKS5) && !validAddress(config.Proxy.Address) {
+		return fmt.Errorf("%w: proxy address %q is invalid", ErrInvalidConfig, config.Proxy.Address)
+	}
+	if config.PendingCapacity < 0 {
+		return fmt.Errorf("%w: pending capacity %d is negative", ErrInvalidConfig, config.PendingCapacity)
+	}
+	if config.MaxPayload < 0 {
+		return fmt.Errorf("%w: max payload %d is negative", ErrInvalidConfig, config.MaxPayload)
+	}
+	if config.UpdateBuffer < 0 {
+		return fmt.Errorf("%w: update buffer %d is negative", ErrInvalidConfig, config.UpdateBuffer)
+	}
+	if config.PoolSize < 0 {
+		return fmt.Errorf("%w: pool size %d is negative", ErrInvalidConfig, config.PoolSize)
+	}
+	if config.PoolIdleTimeout < 0 {
+		return fmt.Errorf("%w: pool idle timeout %s is negative", ErrInvalidConfig, config.PoolIdleTimeout)
+	}
+	if config.Retry.MaxAttempts < 0 {
+		return fmt.Errorf("%w: retry max attempts %d is negative", ErrInvalidConfig, config.Retry.MaxAttempts)
+	}
+	if config.Retry.MaxFloodWait < 0 {
+		return fmt.Errorf("%w: retry max flood wait %s is negative", ErrInvalidConfig, config.Retry.MaxFloodWait)
+	}
+	if config.Reconnect.MaxAttempts < 0 {
+		return fmt.Errorf("%w: reconnect max attempts %d is negative", ErrInvalidConfig, config.Reconnect.MaxAttempts)
+	}
+	if config.Reconnect.InitialDelay < 0 {
+		return fmt.Errorf("%w: reconnect initial delay %s is negative", ErrInvalidConfig, config.Reconnect.InitialDelay)
+	}
+	if config.Reconnect.MaxDelay < 0 {
+		return fmt.Errorf("%w: reconnect max delay %s is negative", ErrInvalidConfig, config.Reconnect.MaxDelay)
+	}
+	if config.Liveness.PingInterval < 0 {
+		return fmt.Errorf("%w: liveness ping interval %s is negative", ErrInvalidConfig, config.Liveness.PingInterval)
+	}
+	if config.Liveness.PongTimeout < 0 {
+		return fmt.Errorf("%w: liveness pong timeout %s is negative", ErrInvalidConfig, config.Liveness.PongTimeout)
 	}
 	if len(config.AuthKey) != 0 && len(config.AuthKey) != 256 {
-		return ErrInvalidConfig
+		return fmt.Errorf("%w: auth key length is %d (must be 256)", ErrInvalidConfig, len(config.AuthKey))
 	}
 	if len(config.AuthKey) != 0 && config.AuthKeyID == 0 {
-		return ErrInvalidConfig
-	}
-	for id, auth := range config.DCAuthKeys {
-		if id <= 0 || id > int(^uint32(0)>>1) || len(auth.Key) != 256 || auth.ID == 0 {
-			return ErrInvalidConfig
-		}
-	}
-	for id, address := range config.DCAddresses {
-		if id <= 0 || id > int(^uint32(0)>>1) || !validAddress(address) {
-			return ErrInvalidConfig
-		}
+		return fmt.Errorf("%w: auth key id is 0 when auth key is set", ErrInvalidConfig)
 	}
 	return nil
 }
