@@ -1,0 +1,33 @@
+[
+  {
+    "kind": "class",
+    "name": "mt_rpc_result",
+    "id": 4082920705,
+    "type": "RpcResult",
+    "arguments": [
+      { "name": "req_msg_id", "type": "long" },
+      { "name": "result", "type": "Object" }
+    ]
+  },
+  {
+    "kind": "class",
+    "name": "mt_message",
+    "id": 1538843921,
+    "type": "Message",
+    "arguments": [
+      { "name": "msg_id", "type": "long" },
+      { "name": "seqno", "type": "int" },
+      { "name": "bytes", "type": "int" },
+      { "name": "body", "type": "Object" }
+    ]
+  },
+  {
+    "kind": "class",
+    "name": "mt_msg_container",
+    "id": 1945237724,
+    "type": "MessageContainer",
+    "arguments": [
+      { "name": "messages", "type": "Message", "typeModifiers": { "isBareVector": true, "isBareType": true, "constructorId": 1538843921 } }
+    ]
+  }
+]
