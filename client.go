@@ -410,23 +410,22 @@ func (client *Client) dialPacket(ctx context.Context, address string) (net.Conn,
 	if ctx == nil {
 		return nil, context.Canceled
 	}
+	var connection net.Conn
+	var err error
 	if client.config.Proxy.Kind == ProxyHTTPConnect {
-		connection, err := transport.DialHTTPConnect(ctx, transport.HTTPProxy{Address: client.config.Proxy.Address, Username: client.config.Proxy.Username, Password: client.config.Proxy.Password}, address)
-		if err != nil {
-			return nil, err
-		}
-		return client.wrapPacket(connection)
+		connection, err = transport.DialHTTPConnect(ctx, transport.HTTPProxy{Address: client.config.Proxy.Address, Username: client.config.Proxy.Username, Password: client.config.Proxy.Password}, address)
+	} else if client.config.Proxy.Kind == ProxySOCKS5 {
+		connection, err = transport.DialSOCKS5(ctx, transport.SOCKS5Proxy{Address: client.config.Proxy.Address, Username: client.config.Proxy.Username, Password: client.config.Proxy.Password}, address)
+	} else {
+		connection, err = (&net.Dialer{}).DialContext(ctx, "tcp", address)
 	}
-	if client.config.Proxy.Kind == ProxySOCKS5 {
-		connection, err := transport.DialSOCKS5(ctx, transport.SOCKS5Proxy{Address: client.config.Proxy.Address, Username: client.config.Proxy.Username, Password: client.config.Proxy.Password}, address)
-		if err != nil {
-			return nil, err
-		}
-		return client.wrapPacket(connection)
-	}
-	connection, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, err
+	}
+	if client.config.NoDelay {
+		if tcpConn, ok := connection.(*net.TCPConn); ok {
+			_ = tcpConn.SetNoDelay(true)
+		}
 	}
 	return client.wrapPacket(connection)
 }

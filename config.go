@@ -135,6 +135,7 @@ type Config struct {
 	InMemory        bool
 	Transport       TransportKind
 	Obfuscate       bool
+	NoDelay         bool
 	Proxy           ProxyConfig
 	Store           session.Store
 	Logger          *slog.Logger

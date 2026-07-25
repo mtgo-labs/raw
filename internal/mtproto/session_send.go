@@ -34,7 +34,7 @@ func PrepareSessionObject(state *SessionState, pending *PendingTable, now time.T
 		Bytes:     int32(size),
 		Body:      object,
 	}
-	request, err := pending.AddMessage(messageID, message)
+	request, err := pending.AddMessage(messageID, message, false)
 	if err != nil {
 		return tl.MTPMessage{}, nil, err
 	}

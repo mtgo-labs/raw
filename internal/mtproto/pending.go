@@ -31,6 +31,7 @@ type PendingResult struct {
 type PendingRequest struct {
 	MessageID     uint64
 	Done          bool
+	Raw           bool // set by InvokeWithRawResult to skip inner TL decode
 	Result        PendingResult
 	done          chan struct{}
 	wireMessageID uint64
@@ -53,12 +54,11 @@ func NewPendingTable(capacity int) *PendingTable {
 	}
 	return &PendingTable{entries: make(map[uint64]*PendingRequest, capacity), capacity: capacity}
 }
-
 func (table *PendingTable) Add(messageID uint64) (*PendingRequest, error) {
-	return table.AddMessage(messageID, tl.MTPMessage{})
+	return table.AddMessage(messageID, tl.MTPMessage{}, false)
 }
 
-func (table *PendingTable) AddMessage(messageID uint64, message tl.MTPMessage) (*PendingRequest, error) {
+func (table *PendingTable) AddMessage(messageID uint64, message tl.MTPMessage, raw bool) (*PendingRequest, error) {
 	if table == nil || messageID == 0 {
 		return nil, ErrPendingMessageID
 	}
@@ -73,7 +73,7 @@ func (table *PendingTable) AddMessage(messageID uint64, message tl.MTPMessage) (
 	if len(table.entries) >= table.capacity {
 		return nil, ErrPendingLimit
 	}
-	request := &PendingRequest{MessageID: messageID, wireMessageID: messageID, message: message, done: make(chan struct{})}
+	request := &PendingRequest{MessageID: messageID, Raw: raw, wireMessageID: messageID, message: message, done: make(chan struct{})}
 	table.entries[messageID] = request
 	return request, nil
 }
@@ -275,6 +275,18 @@ func (table *PendingTable) Contains(messageID uint64) bool {
 	defer table.mu.Unlock()
 	request, exists := table.entries[messageID]
 	return exists && !request.Done
+}
+
+// IsRaw reports whether the pending request was created by InvokeWithRawResult
+// and should receive the undecoded response payload directly.
+func (table *PendingTable) IsRaw(messageID uint64) bool {
+	if table == nil || messageID == 0 {
+		return false
+	}
+	table.mu.Lock()
+	defer table.mu.Unlock()
+	request, exists := table.entries[messageID]
+	return exists && request.Raw
 }
 
 // RecoveryMessages snapshots unresolved outbound messages in message-ID order.
