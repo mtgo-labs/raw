@@ -54,7 +54,7 @@ func TestPendingTableRPCResult(t *testing.T) {
 	if _, err := table.Add(7); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := table.ResolveRPCResult(&tl.MTPRPCResult{ReqMessageID: 7, Result: &tl.MTPReqPQMulti{}})
+	resolved, err := table.ResolveRPCResult(&tl.MTPRPCResult{ReqMessageID: 7, Result: &tl.MTPReqPQMulti{}}, nil)
 	if err != nil || !resolved {
 		t.Fatalf("resolve rpc_result = %v/%v", resolved, err)
 	}
@@ -69,7 +69,7 @@ func TestPendingTableRPCError(t *testing.T) {
 	if _, err := table.Add(10); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := table.ResolveRPCResult(&tl.MTPRPCResult{ReqMessageID: 10, Result: &tl.MTPRPCError{ErrorCode: 400, ErrorMessage: "FLOOD_WAIT_3"}})
+	resolved, err := table.ResolveRPCResult(&tl.MTPRPCResult{ReqMessageID: 10, Result: &tl.MTPRPCError{ErrorCode: 400, ErrorMessage: "FLOOD_WAIT_3"}}, nil)
 	if err != nil || !resolved {
 		t.Fatalf("resolve rpc error = %v/%v", resolved, err)
 	}
@@ -89,7 +89,7 @@ func TestPendingTableMessageContainer(t *testing.T) {
 	}
 	count, err := table.ResolveMessage(&tl.MTPMessageContainer{Messages: []tl.MTPMessage{
 		{MessageID: 9, Body: &tl.MTPRPCResult{ReqMessageID: 8, Result: &tl.MTPReqPQMulti{}}},
-	}})
+	}}, nil)
 	if err != nil || count != 1 {
 		t.Fatalf("resolved = %d/%v", count, err)
 	}

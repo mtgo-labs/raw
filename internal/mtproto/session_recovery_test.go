@@ -22,7 +22,7 @@ func TestBadServerSaltReassignsPendingRequest(t *testing.T) {
 		session.pending,
 		&tl.MTPBadServerSalt{BadMessageID: message.MessageID, ErrorCode: 48, NewServerSalt: 9},
 		serverMessageID(now.Unix(), 1),
-		now,
+		now, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestBadServerSaltReassignsPendingRequest(t *testing.T) {
 	if resolved, err := session.pending.ResolveRPCResult(&tl.MTPRPCResult{
 		ReqMessageID: retry.MessageID,
 		Result:       &tl.MTPReqPQMulti{},
-	}); err != nil || !resolved {
+	}, nil); err != nil || !resolved {
 		t.Fatalf("resolve=%t err=%v", resolved, err)
 	}
 	completed, err := session.WaitPrepared(context.Background(), request)
@@ -59,7 +59,7 @@ func TestBadMessageCorrectsTimeAndRetries(t *testing.T) {
 		session.pending,
 		&tl.MTPBadMessageNotification{BadMessageID: message.MessageID, ErrorCode: 16},
 		serverMessageID(serverTime, 1),
-		now,
+		now, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestBadMessageHighResetsAndRecoversSession(t *testing.T) {
 		session.pending,
 		&tl.MTPBadMessageNotification{BadMessageID: original.MessageID, ErrorCode: 17},
 		serverMessageID(serverTime, 1),
-		now,
+		now, nil,
 	)
 	if err != nil || !result.ResetSession || len(result.RetryMessages) != 0 {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -115,11 +115,11 @@ func TestNewSessionCreatedRecoversForgottenContainer(t *testing.T) {
 		UniqueID:       17,
 		ServerSalt:     9,
 	}
-	result, err := routeInboundObjectAt(session.state, session.pending, created, serverMessageID(now.Unix(), 1), now)
+	result, err := routeInboundObjectAt(session.state, session.pending, created, serverMessageID(now.Unix(), 1), now, nil)
 	if err != nil || len(result.RetryMessages) != 2 || session.Salt() != 9 {
 		t.Fatalf("result=%+v salt=%d err=%v", result, session.Salt(), err)
 	}
-	duplicate, err := routeInboundObjectAt(session.state, session.pending, created, serverMessageID(now.Unix(), 3), now)
+	duplicate, err := routeInboundObjectAt(session.state, session.pending, created, serverMessageID(now.Unix(), 3), now, nil)
 	if err != nil || len(duplicate.RetryMessages) != 0 {
 		t.Fatalf("duplicate=%+v err=%v", duplicate, err)
 	}
@@ -137,7 +137,7 @@ func TestDetailedInfoRequestsMissingAnswer(t *testing.T) {
 		session.pending,
 		&tl.MTPMessageDetailedInfo{MessageID: message.MessageID, AnswerMessageID: 19, Status: 4},
 		serverMessageID(now.Unix(), 1),
-		now,
+		now, nil,
 	)
 	if err != nil || len(result.ResendIDs) != 1 || result.ResendIDs[0] != 19 || !request.acknowledged {
 		t.Fatalf("result=%+v request=%+v err=%v", result, request, err)
@@ -180,7 +180,7 @@ func TestMessagesAllInfoRetriesMissingAndGeneratedResponses(t *testing.T) {
 	result, err := routeInboundObjectAt(session.state, session.pending, &tl.MTPMessagesAllInfo{
 		MessageIDs: []int64{first.MessageID, second.MessageID},
 		Info:       []byte{1, 68},
-	}, serverMessageID(now.Unix(), 1), now)
+	}, serverMessageID(now.Unix(), 1), now, nil)
 	if err != nil || len(result.RetryMessages) != 2 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -190,11 +190,11 @@ func TestNewSessionCreatedSignalsMissedUpdates(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	session := NewSession(recoveryTestAuthKey(t), 1, [8]byte{1}, 1)
 	first := &tl.MTPNewSessionCreated{FirstMessageID: 1, UniqueID: 1, ServerSalt: 2}
-	if _, err := routeInboundObjectAt(session.state, session.pending, first, serverMessageID(now.Unix(), 1), now); err != nil {
+	if _, err := routeInboundObjectAt(session.state, session.pending, first, serverMessageID(now.Unix(), 1), now, nil); err != nil {
 		t.Fatal(err)
 	}
 	second := &tl.MTPNewSessionCreated{FirstMessageID: 1, UniqueID: 2, ServerSalt: 3}
-	result, err := routeInboundObjectAt(session.state, session.pending, second, serverMessageID(now.Unix(), 3), now)
+	result, err := routeInboundObjectAt(session.state, session.pending, second, serverMessageID(now.Unix(), 3), now, nil)
 	if err != nil || len(result.Updates) != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}

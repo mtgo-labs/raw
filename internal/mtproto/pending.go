@@ -2,6 +2,7 @@ package mtproto
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"slices"
 	"sync"
@@ -95,13 +96,28 @@ func (table *PendingTable) Resolve(messageID uint64, result PendingResult) bool 
 
 // ResolveRPCResult encodes the validated rpc_result payload and completes its
 // matching pending request. Unknown request IDs are ignored by design.
-func (table *PendingTable) ResolveRPCResult(result *tl.MTPRPCResult) (bool, error) {
+func (table *PendingTable) ResolveRPCResult(result *tl.MTPRPCResult, rawBody []byte) (bool, error) {
 	if result == nil || result.ReqMessageID == 0 || result.Result == nil {
 		return false, ErrPendingMessageID
 	}
 	if rpcError, ok := result.Result.(*tl.MTPRPCError); ok {
 		return table.Resolve(uint64(result.ReqMessageID), PendingResult{Err: tgerr.New(rpcError.ErrorCode, rpcError.ErrorMessage)}), nil
 	}
+	if len(rawBody) >= 4 {
+		ctor := binary.LittleEndian.Uint32(rawBody[:4])
+		if ctor == tl.MTPRPCErrorConstructorID {
+			obj, err := tl.Decode(rawBody, tl.DefaultDecodeLimits())
+			if err != nil {
+				return false, err
+			}
+			if rpcError, ok := obj.(*tl.MTPRPCError); ok {
+				return table.Resolve(uint64(result.ReqMessageID), PendingResult{Err: tgerr.New(rpcError.ErrorCode, rpcError.ErrorMessage)}), nil
+			}
+			return false, ErrPendingMessageID
+		}
+		return table.Resolve(uint64(result.ReqMessageID), PendingResult{Body: rawBody}), nil
+	}
+
 	body, err := tl.Encode(result.Result)
 	if err != nil {
 		return false, err
@@ -111,10 +127,10 @@ func (table *PendingTable) ResolveRPCResult(result *tl.MTPRPCResult) (bool, erro
 
 // ResolveMessage dispatches only protocol response envelopes to the pending
 // table. Non-rpc objects are intentionally ignored for the session layer.
-func (table *PendingTable) ResolveMessage(object tl.Object) (int, error) {
+func (table *PendingTable) ResolveMessage(object tl.Object, rawBody []byte) (int, error) {
 	switch value := object.(type) {
 	case *tl.MTPRPCResult:
-		resolved, err := table.ResolveRPCResult(value)
+		resolved, err := table.ResolveRPCResult(value, rawBody)
 		if err != nil {
 			return 0, err
 		}
@@ -129,7 +145,7 @@ func (table *PendingTable) ResolveMessage(object tl.Object) (int, error) {
 			if entry.Body == nil {
 				return resolved, ErrPendingContainer
 			}
-			count, err := table.ResolveMessage(entry.Body)
+			count, err := table.ResolveMessage(entry.Body, nil)
 			if err != nil {
 				return resolved, err
 			}

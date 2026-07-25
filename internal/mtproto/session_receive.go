@@ -85,7 +85,11 @@ func receiveSessionPayloadAt(payload []byte, state *SessionState, pending *Pendi
 	if err := state.validateIncomingMessageIDs(messageID, object, now); err != nil {
 		return InboundResult{}, messageID, sequenceNo, err
 	}
-	result, err := routeInboundObjectAt(state, pending, object, messageID, now)
+	var rawBody []byte
+	if _, ok := object.(*tl.MTPRPCResult); ok && len(body) > 12 {
+		rawBody = body[12:]
+	}
+	result, err := routeInboundObjectAt(state, pending, object, messageID, now, rawBody)
 	if err == nil && requiresAcknowledgement(object) {
 		result.AcknowledgeIDs = append(result.AcknowledgeIDs, int64(messageID))
 	}
@@ -111,11 +115,11 @@ func confirmsBootstrapSalt(object tl.Object, envelopeSalt int64) bool {
 // traversed once; arbitrary nested application objects are never recursively
 // dispatched.
 func RouteInboundObject(state *SessionState, pending *PendingTable, object tl.Object) (InboundResult, error) {
-	return routeInboundObjectAt(state, pending, object, 0, time.Now())
+	return routeInboundObjectAt(state, pending, object, 0, time.Now(), nil)
 }
 
 func routeInboundObject(state *SessionState, pending *PendingTable, object tl.Object, messageID uint64) (InboundResult, error) {
-	return routeInboundObjectAt(state, pending, object, messageID, time.Now())
+	return routeInboundObjectAt(state, pending, object, messageID, time.Now(), nil)
 }
 
 func routeInboundObjectAt(
@@ -124,6 +128,7 @@ func routeInboundObjectAt(
 	object tl.Object,
 	messageID uint64,
 	now time.Time,
+	rawBody []byte,
 ) (InboundResult, error) {
 	if state == nil || pending == nil || object == nil {
 		return InboundResult{}, ErrSessionControl
@@ -135,7 +140,7 @@ func routeInboundObjectAt(
 			if entry.Body == nil {
 				return result, ErrPendingContainer
 			}
-			child, err := routeInboundObjectAt(state, pending, entry.Body, uint64(entry.MessageID), now)
+			child, err := routeInboundObjectAt(state, pending, entry.Body, uint64(entry.MessageID), now, nil)
 			if err != nil {
 				return result, err
 			}
@@ -286,7 +291,7 @@ func routeInboundObjectAt(
 		}
 		return result, nil
 	}
-	resolved, err := pending.ResolveMessage(object)
+	resolved, err := pending.ResolveMessage(object, rawBody)
 	if err != nil {
 		return InboundResult{}, err
 	}
