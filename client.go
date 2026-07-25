@@ -416,6 +416,8 @@ func (client *Client) dialPacket(ctx context.Context, address string) (net.Conn,
 		connection, err = transport.DialHTTPConnect(ctx, transport.HTTPProxy{Address: client.config.Proxy.Address, Username: client.config.Proxy.Username, Password: client.config.Proxy.Password}, address)
 	} else if client.config.Proxy.Kind == ProxySOCKS5 {
 		connection, err = transport.DialSOCKS5(ctx, transport.SOCKS5Proxy{Address: client.config.Proxy.Address, Username: client.config.Proxy.Username, Password: client.config.Proxy.Password}, address)
+	} else if client.config.NetPoll {
+		connection, err = transport.DialNetPoll(ctx, address)
 	} else {
 		connection, err = (&net.Dialer{}).DialContext(ctx, "tcp", address)
 	}

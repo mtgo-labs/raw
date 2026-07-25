@@ -133,10 +133,14 @@ type Config struct {
 	SessionStringKey []byte
 	TestMode         bool
 	// InMemory uses an in-memory session store when Store is not set.
-	InMemory        bool
-	Transport       TransportKind
-	Obfuscate       bool
-	NoDelay         bool
+	InMemory  bool
+	Transport TransportKind
+	Obfuscate bool
+	NoDelay   bool
+	// NetPoll selects the CloudWeGo/netpoll epoll-based transport instead of
+	// the standard net package. It is Linux-only and ignored when a proxy is
+	// configured. The zero value (false) keeps the default TCP transport.
+	NetPoll         bool
 	Proxy           ProxyConfig
 	Store           session.Store
 	Logger          *slog.Logger
