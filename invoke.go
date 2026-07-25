@@ -19,7 +19,7 @@ func Invoke[T any](ctx context.Context, client *Client, request tl.Request[T]) (
 
 // InvokeRaw sends a generated request and returns the raw undecoded response
 // body. The caller is responsible for interpreting the bytes.
-func InvokeRaw(ctx context.Context, client *Client, request tl.Request[any]) ([]byte, error) {
+func InvokeRaw(ctx context.Context, client *Client, request tl.Object) ([]byte, error) {
 	if client == nil {
 		return nil, ErrNotConnected
 	}
@@ -281,7 +281,7 @@ selectRoute:
 	return tl.DecodeResult(request, pending.Result.Body, tl.DefaultDecodeLimits())
 }
 
-func invokeWithMigrationRaw(ctx context.Context, client *Client, request tl.Request[any], options InvokeOptions) ([]byte, error) {
+func invokeWithMigrationRaw(ctx context.Context, client *Client, request tl.Object, options InvokeOptions) ([]byte, error) {
 	result, err := invokeRouteRaw(ctx, client, request, options)
 	if err == nil {
 		return result, nil
@@ -314,7 +314,7 @@ func invokeWithMigrationRaw(ctx context.Context, client *Client, request tl.Requ
 	return invokeRouteRaw(ctx, client, request, options)
 }
 
-func invokeRouteRaw(ctx context.Context, client *Client, request tl.Request[any], options InvokeOptions) ([]byte, error) {
+func invokeRouteRaw(ctx context.Context, client *Client, request tl.Object, options InvokeOptions) ([]byte, error) {
 	if client == nil {
 		return nil, ErrNotConnected
 	}
@@ -335,7 +335,7 @@ selectRoute:
 	var sendMu *sync.Mutex
 	var sender *routeSender
 	var ordering *map[string]uint64
-	var initConnectionDone *bool
+	var _ *bool
 	dcid := options.DCID
 	if dcid == 0 {
 		dcid = client.config.DCID
@@ -363,7 +363,7 @@ selectRoute:
 		if route.sender == nil {
 			route.sender = client.startRouteSenderLocked(selectedKey, route.session, route.connection, &route.writeMu)
 		}
-		sessionState, connection, sendMu, writeMu, sender, ordering, initConnectionDone = route.session, route.connection, &route.sendMu, &route.writeMu, route.sender, &route.ordering, &route.initConnectionDone
+		sessionState, connection, sendMu, writeMu, sender, ordering, _ = route.session, route.connection, &route.sendMu, &route.writeMu, route.sender, &route.ordering, &route.initConnectionDone
 	} else if options.Kind == ConnectionMain {
 		if client.conn == nil || client.session == nil {
 			client.mu.Unlock()
@@ -387,27 +387,14 @@ selectRoute:
 		if client.sender == nil {
 			client.sender = client.startRouteSenderLocked(selectedKey, client.session, client.conn, &client.writeMu)
 		}
-		sessionState, connection, sendMu, writeMu, sender, ordering, initConnectionDone = client.session, client.conn, &client.sendMu, &client.writeMu, client.sender, &client.ordering, &client.initConnectionDone
+		sessionState, connection, sendMu, writeMu, sender, ordering, _ = client.session, client.conn, &client.sendMu, &client.writeMu, client.sender, &client.ordering, &client.initConnectionDone
 	} else {
 		client.mu.Unlock()
 		return nil, ErrNotConnected
 	}
 	client.mu.Unlock()
 	sendMu.Lock()
-	wireRequest := request
-	wrappedInitConnection := !*initConnectionDone
-	if wrappedInitConnection {
-		wireRequest = wrapInitConnection(client.config.APIID, client.config.InitConnection, request)
-	}
-	var object tl.Object = wireRequest
-	if options.OrderingKey != "" {
-		if *ordering == nil {
-			*ordering = make(map[string]uint64)
-		}
-		if previous := (*ordering)[options.OrderingKey]; previous != 0 {
-			object = orderedRequest(wireRequest, previous)
-		}
-	}
+	var object tl.Object = request
 	now := client.now()
 	var err error
 	sendFailed := false
@@ -462,11 +449,6 @@ selectRoute:
 	}
 	if waitErr == nil {
 		sendMu.Lock()
-		if tgerr.IsConnectionNotInited(pending.Result.Err) {
-			*initConnectionDone = false
-		} else if wrappedInitConnection {
-			*initConnectionDone = true
-		}
 		sendMu.Unlock()
 	}
 	if pending.Result.Err != nil {
