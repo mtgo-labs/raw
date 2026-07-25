@@ -27,6 +27,76 @@ func readNextRequest(server net.Conn, key mtproto.AuthKey, sessionID [8]byte) (u
 	}
 }
 
+// requestStream reads decrypted client messages and yields application-level
+// requests one at a time, transparently unwrapping msg_container and skipping
+// acks. The client may batch a retry together with its acks into a container
+// (SendPreparedSessionObjects containers when more than one message is ready),
+// which the race detector's scheduling makes more likely — so a strict "one
+// decrypted frame == one request" assumption is brittle.
+type requestStream struct {
+	server    net.Conn
+	key       mtproto.AuthKey
+	sessionID [8]byte
+	pending   []clientRequest
+}
+
+type clientRequest struct {
+	id   uint64
+	body []byte
+}
+
+const msgContainerConstructorID = 0x73f1f8dc
+
+func (stream *requestStream) next() (uint64, []byte, error) {
+	for len(stream.pending) == 0 {
+		outerID, body, err := readClientRequest(stream.server, stream.key, stream.sessionID)
+		if err != nil {
+			return 0, nil, err
+		}
+		stream.pending = appendClientRequests(stream.pending, body, outerID)
+	}
+	request := stream.pending[0]
+	stream.pending = stream.pending[1:]
+	return request.id, request.body, nil
+}
+
+// appendClientRequests collects application-level request bodies from body. A
+// msg_container is decoded into its bare messages (msg_id:long seqno:int
+// bytes:int body:bytes); acks are skipped. A non-container body is returned as
+// a single request unless it is itself an ack.
+func appendClientRequests(out []clientRequest, body []byte, outerID uint64) []clientRequest {
+	if len(body) >= 4 && binary.LittleEndian.Uint32(body) == msgContainerConstructorID {
+		data := body[4:]
+		if len(data) < 4 {
+			return out
+		}
+		count := binary.LittleEndian.Uint32(data)
+		data = data[4:]
+		for index := uint32(0); index < count; index++ {
+			if len(data) < 16 { // msg_id:long + seqno:int + bytes:int
+				break
+			}
+			messageID := binary.LittleEndian.Uint64(data)
+			length := int(binary.LittleEndian.Uint32(data[12:]))
+			data = data[16:]
+			if length < 4 || length > len(data) {
+				break
+			}
+			inner := data[:length]
+			data = data[length:]
+			if len(inner) >= 4 && binary.LittleEndian.Uint32(inner) == tl.MTPMessagesAckConstructorID {
+				continue
+			}
+			out = append(out, clientRequest{id: messageID, body: inner})
+		}
+		return out
+	}
+	if len(body) >= 4 && binary.LittleEndian.Uint32(body) == tl.MTPMessagesAckConstructorID {
+		return out
+	}
+	return append(out, clientRequest{id: outerID, body: body})
+}
+
 func testBotUser(id int64) *tl.User {
 	version := int32(0)
 	return &tl.User{ID: id, Self: true, Bot: true, BotInfoVersion: &version, FirstName: new("bot")}
@@ -139,26 +209,35 @@ func TestStartBotLoginAfterUnregisteredKey(t *testing.T) {
 	if _, err := io.ReadFull(server, header[:]); err != nil {
 		t.Fatal(err)
 	}
-	messageID, body, err := readNextRequest(server, key, sessionID)
+	stream := &requestStream{server: server, key: key, sessionID: sessionID}
+	invokeMessageID, invokeBody, err := stream.next()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binary.LittleEndian.Uint32(body) != tl.InvokeWithLayerRequestConstructorID {
-		t.Fatalf("first expected invokeWithLayer, got %#x", binary.LittleEndian.Uint32(body))
+	if binary.LittleEndian.Uint32(invokeBody) != tl.InvokeWithLayerRequestConstructorID {
+		t.Fatalf("first expected invokeWithLayer, got %#x", binary.LittleEndian.Uint32(invokeBody))
 	}
-	if err := writeServerResult(server, key, sessionID, messageID, &tl.MTPRPCError{
+	if err := writeServerResult(server, key, sessionID, invokeMessageID, &tl.MTPRPCError{
 		ErrorCode: 401, ErrorMessage: tgerr.ErrAuthKeyUnregistered,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	messageID, body, err = readNextRequest(server, key, sessionID)
-	if err != nil {
-		t.Fatal(err)
+	// After AUTH_KEY_UNREGISTERED the client re-attempts the login. The retry
+	// may be batched into a msg_container (with acks or a re-sent
+	// invokeWithLayer), so unwrap containers and read until the
+	// importBotAuthorization query arrives.
+	var loginMessageID uint64
+	for {
+		id, requestBody, err := stream.next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if binary.LittleEndian.Uint32(requestBody) == tl.AuthImportBotAuthorizationRequestConstructorID {
+			loginMessageID = id
+			break
+		}
 	}
-	if binary.LittleEndian.Uint32(body) != tl.AuthImportBotAuthorizationRequestConstructorID {
-		t.Fatalf("second expected auth.importBotAuthorization, got %#x", binary.LittleEndian.Uint32(body))
-	}
-	if err := writeServerResult(server, key, sessionID, messageID, &tl.AuthAuthorization{
+	if err := writeServerResult(server, key, sessionID, loginMessageID, &tl.AuthAuthorization{
 		User: testBotUser(99),
 	}); err != nil {
 		t.Fatal(err)
