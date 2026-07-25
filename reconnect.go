@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mtgo-labs/raw/internal/mtproto"
+	"github.com/mtgo-labs/raw/tgerr"
 )
 
 type clientReconnect struct {
@@ -308,5 +309,6 @@ func terminalReconnectError(err error) bool {
 		errors.Is(err, ErrUnsupportedRoute) ||
 		errors.Is(err, ErrInvalidConfig) ||
 		errors.Is(err, mtproto.ErrSessionClosed) ||
-		errors.Is(err, context.Canceled)
+		errors.Is(err, context.Canceled) ||
+		tgerr.IsCode(err, 406)
 }

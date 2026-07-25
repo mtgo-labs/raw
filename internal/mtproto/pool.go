@@ -108,6 +108,9 @@ func (pool *ConnectionPool) Discard(key PoolKey, connection net.Conn) error {
 		pool.active[key]--
 	}
 	pool.mu.Unlock()
+	if tcp, ok := connection.(*net.TCPConn); ok {
+		_ = tcp.SetLinger(0)
+	}
 	return connection.Close()
 }
 
