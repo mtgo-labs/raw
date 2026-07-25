@@ -16,11 +16,16 @@ func SendEncryptedObjectWithSalt(writer io.Writer, random io.Reader, authKey Aut
 	if object == nil {
 		return EncryptedMessage{}, ErrEncryptedMessage
 	}
-	body, err := tl.Encode(object)
+	buf := encodeBufPool.Get().(*[]byte)
+	*buf = (*buf)[:0]
+	encoded, err := tl.Append(*buf, object)
 	if err != nil {
+		encodeBufPool.Put(buf)
 		return EncryptedMessage{}, fmt.Errorf("mtproto: encode encrypted object: %w", err)
 	}
-	return SendEncryptedWithSalt(writer, random, authKey, salt, sessionID, messageID, sequenceNo, body)
+	msg, err := SendEncryptedWithSalt(writer, random, authKey, salt, sessionID, messageID, sequenceNo, encoded)
+	encodeBufPool.Put(buf)
+	return msg, err
 }
 
 // ReceiveEncryptedObject reads and decodes one server-to-client TL object.
