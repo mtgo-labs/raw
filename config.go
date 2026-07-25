@@ -1,6 +1,7 @@
 package raw
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -87,6 +88,12 @@ const (
 	TransportPaddedIntermediate
 )
 
+// DialFunc establishes the underlying TCP connection to a Telegram DC.
+// When Config.DialFunc is set, it replaces the default net.Dialer. The
+// returned connection must implement net.Conn and is wrapped by the
+// transport layer (PacketConn or obfuscation) before use.
+type DialFunc func(ctx context.Context, address string) (net.Conn, error)
+
 type ProxyKind uint8
 
 const (
@@ -137,12 +144,13 @@ type Config struct {
 	Transport TransportKind
 	Obfuscate bool
 	NoDelay   bool
-	// NetPoll selects the CloudWeGo/netpoll epoll-based transport instead of
-	// the standard net package. It is Linux-only and ignored when a proxy is
-	// configured. The zero value (false) keeps the default TCP transport.
-	NetPoll         bool
-	Proxy           ProxyConfig
-	Store           session.Store
+	// DialFunc overrides the default TCP dialer. When set, it replaces
+	// net.Dialer for establishing the underlying TCP connection. Ignored
+	// when a proxy is configured. See github.com/mtgo-labs/contrib/netpoll
+	// for a CloudWeGo/netpoll-based implementation.
+	DialFunc DialFunc
+	Proxy    ProxyConfig
+	Store    session.Store
 	Logger          *slog.Logger
 	PendingCapacity int
 	MaxPayload      int
