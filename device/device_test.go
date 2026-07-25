@@ -250,7 +250,7 @@ func TestInitConnectionDefaultsPreserved(t *testing.T) {
 	// Build a real config — the raw package should fill defaults for
 	// fields we don't set.
 	cfg := raw.Config{
-		APIID:  12345,
+		APIID:   12345,
 		APIHash: "test",
 	}
 	cfg.InitConnection = ic

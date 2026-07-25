@@ -45,8 +45,8 @@ func TestStartReturnsExistingUser(t *testing.T) {
 
 	client, err := NewClient(Config{
 		APIID: 1, APIHash: "hash", BotToken: "ignored",
-		Address:   listener.Addr().String(),
-		AuthKey:   append([]byte(nil), key.Key[:]...), AuthKeyID: key.ID,
+		Address: listener.Addr().String(),
+		AuthKey: append([]byte(nil), key.Key[:]...), AuthKeyID: key.ID,
 		SessionID: sessionID, Liveness: LivenessPolicy{Disabled: true},
 	})
 	if err != nil {
@@ -112,8 +112,8 @@ func TestStartBotLoginAfterUnregisteredKey(t *testing.T) {
 
 	client, err := NewClient(Config{
 		APIID: 1, APIHash: "hash", BotToken: "123:abc",
-		Address:   listener.Addr().String(),
-		AuthKey:   append([]byte(nil), key.Key[:]...), AuthKeyID: key.ID,
+		Address: listener.Addr().String(),
+		AuthKey: append([]byte(nil), key.Key[:]...), AuthKeyID: key.ID,
 		SessionID: sessionID, Liveness: LivenessPolicy{Disabled: true},
 	})
 	if err != nil {
@@ -197,8 +197,8 @@ func TestStartRejectsMissingCredentials(t *testing.T) {
 
 	client, err := NewClient(Config{
 		APIID: 1, APIHash: "hash",
-		Address:   listener.Addr().String(),
-		AuthKey:   append([]byte(nil), key.Key[:]...), AuthKeyID: key.ID,
+		Address: listener.Addr().String(),
+		AuthKey: append([]byte(nil), key.Key[:]...), AuthKeyID: key.ID,
 		SessionID: sessionID, Liveness: LivenessPolicy{Disabled: true},
 	})
 	if err != nil {
@@ -247,8 +247,8 @@ func TestDisconnectAllowsReconnect(t *testing.T) {
 
 	client, err := NewClient(Config{
 		APIID: 1, APIHash: "hash", BotToken: "ignored",
-		Address:   listener.Addr().String(),
-		AuthKey:   append([]byte(nil), key.Key[:]...), AuthKeyID: key.ID,
+		Address: listener.Addr().String(),
+		AuthKey: append([]byte(nil), key.Key[:]...), AuthKeyID: key.ID,
 		SessionID: sessionID, Liveness: LivenessPolicy{Disabled: true},
 		Reconnect: ReconnectPolicy{Disabled: true},
 	})

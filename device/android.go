@@ -4894,4 +4894,3 @@ func randomAndroidDevice(uniqueID string) deviceInfo {
 		version: androidSystemVersions[(h/uint64(len(androidDeviceModels)))%uint64(len(androidSystemVersions))],
 	}
 }
-

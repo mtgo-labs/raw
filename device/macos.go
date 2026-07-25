@@ -161,4 +161,3 @@ func randomMacOSDevice(uniqueID string) deviceInfo {
 		version: macOSSystemVersions[(h/uint64(len(macOSDeviceModels)))%uint64(len(macOSSystemVersions))],
 	}
 }
-

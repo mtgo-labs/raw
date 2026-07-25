@@ -275,4 +275,3 @@ func orderedRequest[T any](request tl.Request[T], previous uint64) tl.Object {
 	}
 	return &tl.InvokeAfterMessageRequest[T]{MessageID: int64(previous), Query: request}
 }
-
