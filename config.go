@@ -141,6 +141,9 @@ type Config struct {
 	PendingCapacity   int
 	MaxPayload        int
 	UpdateBuffer      int
+	// NoUpdates disables update collection. When true, the Updates channel
+	// is nil and inbound updates are silently discarded.
+	NoUpdates bool
 	PoolSize          int
 	PoolIdleTimeout   time.Duration
 	Retry             RetryPolicy

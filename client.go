@@ -182,7 +182,7 @@ func NewClient(config Config) (*Client, error) {
 	if config.MaxPayload == 0 {
 		config.MaxPayload = defaultMaxPayload
 	}
-	if config.UpdateBuffer == 0 {
+	if !config.NoUpdates && config.UpdateBuffer == 0 {
 		config.UpdateBuffer = defaultUpdateBuffer
 	}
 	if config.PoolSize == 0 {
@@ -248,15 +248,18 @@ func NewClient(config Config) (*Client, error) {
 		_ = endpoints.Set(mtproto.DCEndpoint{ID: id, Address: address})
 	}
 	reconnectCtx, stopReconnect := context.WithCancel(context.Background())
+	var updates chan tl.UpdatesClass
+	if !config.NoUpdates {
+		updates = make(chan tl.UpdatesClass, config.UpdateBuffer)
+	}
 	client := &Client{
 		config:        config,
 		done:          make(chan struct{}),
-		updates:       make(chan tl.UpdatesClass, config.UpdateBuffer),
+		updates:       updates,
 		pool:          mtproto.NewConnectionPool(config.PoolSize),
 		routes:        make(map[routeKey]*clientRoute),
 		endpoints:     endpoints,
 		now:           time.Now,
-		authRandom:    rand.Reader,
 		tmpSessions:   1,
 		connectFlood:  make(map[routeKey]*connectionFloodControl),
 		reconnects:    make(map[routeKey]*clientReconnect),
@@ -619,6 +622,10 @@ func (client *Client) receiveRoute(key routeKey, route *clientRoute) {
 				client.mu.Unlock()
 				return
 			}
+			if client.updates == nil {
+				client.mu.Unlock()
+				continue
+			}
 			select {
 			case client.updates <- update:
 				client.mu.Unlock()
@@ -943,7 +950,9 @@ func (client *Client) closeLocked(cause error) error {
 		closeErr = err
 	}
 	close(client.done)
-	close(client.updates)
+	if client.updates != nil {
+		close(client.updates)
+	}
 	if cause != nil {
 		client.err = cause
 	} else {
