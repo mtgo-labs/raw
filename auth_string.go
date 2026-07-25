@@ -33,22 +33,28 @@ func applySessionString(config *Config) error {
 		return fmt.Errorf("%w: session string key provided for an unencrypted format", ErrInvalidConfig)
 	}
 	if len(config.AuthKey) != 0 || config.AuthKeyID != 0 || config.AuthKeyTimeOffset != 0 ||
-		config.Salt != 0 || config.SessionID != [8]byte{} ||
-		config.DCID != 0 && config.DCID != value.Main.ID ||
-		value.APIID != 0 && config.APIID != 0 && config.APIID != value.APIID ||
-		value.TestModeKnown && config.TestMode && !value.Main.TestMode {
-		return fmt.Errorf("%w: session string conflicts with explicit authorization or backend configuration", ErrInvalidConfig)
+		config.Salt != 0 || config.SessionID != [8]byte{} {
+		return fmt.Errorf("%w: session string conflicts with explicit auth key or salt", ErrInvalidConfig)
+	}
+	if config.DCID != 0 && config.DCID != value.Main.ID {
+		return fmt.Errorf("%w: session string DC %d conflicts with config DC %d", ErrInvalidConfig, value.Main.ID, config.DCID)
+	}
+	if value.APIID != 0 && config.APIID != 0 && config.APIID != value.APIID {
+		return fmt.Errorf("%w: session string api_id %d conflicts with config api_id %d", ErrInvalidConfig, value.APIID, config.APIID)
+	}
+	if value.TestModeKnown && config.TestMode && !value.Main.TestMode {
+		return fmt.Errorf("%w: session string is production but config is test mode", ErrInvalidConfig)
 	}
 	address := value.Main.Address
 	if config.Address != "" {
 		if value.AddressKnown && config.Address != address {
-			return fmt.Errorf("%w: session string conflicts with primary DC address", ErrInvalidConfig)
+			return fmt.Errorf("%w: session string address %s conflicts with config address %s", ErrInvalidConfig, address, config.Address)
 		}
 		address = config.Address
 	}
 	if configured, ok := config.DCAddresses[value.Main.ID]; ok {
 		if value.AddressKnown && configured != address {
-			return fmt.Errorf("%w: session string conflicts with primary DC address", ErrInvalidConfig)
+			return fmt.Errorf("%w: session string address %s conflicts with DCAddresses[%d] %s", ErrInvalidConfig, address, value.Main.ID, configured)
 		}
 		address = configured
 	}
