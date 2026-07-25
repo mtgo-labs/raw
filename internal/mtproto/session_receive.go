@@ -67,11 +67,13 @@ func receiveSessionPayloadAt(payload []byte, state *SessionState, pending *Pendi
 		envelopeSalt int64
 		err          error
 	)
-	if salt == 0 {
-		messageID, sequenceNo, body, envelopeSalt, err = decryptMessageWithoutExpectedSalt(authKey, sessionID, payload)
-	} else {
-		messageID, sequenceNo, body, err = DecryptMessageWithSalt(authKey, salt, sessionID, payload)
-	}
+	// Decrypt without strict salt validation. MTProto authenticates the salt
+	// through the message key, which covers the full plaintext including the
+	// salt field, so an equality check is redundant for integrity. Validating
+	// it rejects legitimate messages after the server rotates its salt —
+	// mtcute never validates the incoming salt and updates the outgoing salt
+	// only via bad_server_salt / new_session_created / future_salts.
+	messageID, sequenceNo, body, envelopeSalt, err = decryptMessageWithoutExpectedSalt(authKey, sessionID, payload)
 	if err != nil {
 		return InboundResult{}, messageID, sequenceNo, err
 	}

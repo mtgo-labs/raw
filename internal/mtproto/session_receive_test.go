@@ -177,3 +177,43 @@ func TestReceiveSessionObjectRejectsUnconfirmedBootstrapSalt(t *testing.T) {
 		})
 	}
 }
+
+func TestReceiveSessionObjectAcceptsRotatedServerSalt(t *testing.T) {
+	now := time.Now()
+	authKey, err := NewAuthKey(bytes.Repeat([]byte{0x42}, 256), [16]byte{}, [32]byte{}, now.Unix(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Steady-state session: the client already holds salt 5. The server has
+	// rotated its salt to 99 and responds with the new value. MTProto
+	// authenticates the salt through the message key (it covers the full
+	// plaintext), so this must decrypt successfully rather than be rejected
+	// as a salt mismatch. mtcute never validates the incoming salt.
+	state := NewSessionState(5, [8]byte{4}, 0)
+	pending := NewPendingTable(1)
+	responseID := serverMessageID(now.Unix(), 1)
+	serverMessage, err := encryptMessageWithSalt(
+		&constantReader{value: 7},
+		authKey,
+		99,
+		state.SessionID(),
+		responseID,
+		2,
+		mustEncodeObject(t, &tl.MTPPong{MessageID: 1, PingID: 2}),
+		cryptoutil.ServerToClient,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire bytes.Buffer
+	if err := transport.WriteIntermediate(&wire, serverMessage.Payload); err != nil {
+		t.Fatal(err)
+	}
+	result, messageID, _, err := ReceiveSessionObject(&wire, state, pending, authKey, 4096)
+	if err != nil {
+		t.Fatalf("rotated-salt message rejected: %v", err)
+	}
+	if messageID != responseID || len(result.Pongs) != 1 || result.Pongs[0].PingID != 2 {
+		t.Fatalf("result=%+v id=%x", result, messageID)
+	}
+}
