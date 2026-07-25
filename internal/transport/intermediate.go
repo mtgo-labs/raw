@@ -39,13 +39,11 @@ func WriteIntermediate(writer io.Writer, payload []byte) error {
 	if len(payload) == 0 || len(payload)%4 != 0 || uint64(len(payload)) > uint64(^uint32(0)) {
 		return ErrIntermediateLength
 	}
-	var header [4]byte
-	binary.LittleEndian.PutUint32(header[:], uint32(len(payload)))
-	if err := writeFull(writer, header[:]); err != nil {
-		return fmt.Errorf("transport: write intermediate header: %w", err)
-	}
-	if err := writeFull(writer, payload); err != nil {
-		return fmt.Errorf("transport: write intermediate payload: %w", err)
+	frame := make([]byte, 4+len(payload))
+	binary.LittleEndian.PutUint32(frame[:4], uint32(len(payload)))
+	copy(frame[4:], payload)
+	if err := writeFull(writer, frame); err != nil {
+		return fmt.Errorf("transport: write intermediate: %w", err)
 	}
 	return nil
 }

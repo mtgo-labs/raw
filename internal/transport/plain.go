@@ -44,19 +44,13 @@ func WritePlain(writer io.Writer, messageID uint64, body []byte) error {
 
 func writePlainIntermediate(writer io.Writer, messageID uint64, body []byte) error {
 	length := 20 + len(body)
-	var frameHeader [4]byte
-	binary.LittleEndian.PutUint32(frameHeader[:], uint32(length))
-	if err := writeFull(writer, frameHeader[:]); err != nil {
-		return fmt.Errorf("transport: write plain frame header: %w", err)
-	}
-	var plainHeader [20]byte
-	binary.LittleEndian.PutUint64(plainHeader[8:16], messageID)
-	binary.LittleEndian.PutUint32(plainHeader[16:20], uint32(len(body)))
-	if err := writeFull(writer, plainHeader[:]); err != nil {
-		return fmt.Errorf("transport: write plain header: %w", err)
-	}
-	if err := writeFull(writer, body); err != nil {
-		return fmt.Errorf("transport: write plain body: %w", err)
+	frame := make([]byte, 4+20+len(body))
+	binary.LittleEndian.PutUint32(frame[:4], uint32(length))
+	binary.LittleEndian.PutUint64(frame[12:20], messageID)
+	binary.LittleEndian.PutUint32(frame[20:24], uint32(len(body)))
+	copy(frame[24:], body)
+	if err := writeFull(writer, frame); err != nil {
+		return fmt.Errorf("transport: write plain intermediate: %w", err)
 	}
 	return nil
 }
