@@ -85,7 +85,7 @@ jobs:
           fuzz() {
             local package="$1"
             local target="$2"
-            go test -run '^$' -fuzz "^${target}$" -fuzztime=1s "$package"
+            go test -run '^$' -fuzz "^${target}$" -fuzztime=5s "$package"
           }
 
           fuzz ./tl FuzzDecoderBytes
