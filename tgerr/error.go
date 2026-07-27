@@ -42,6 +42,43 @@ func (e *Error) FloodWait() (time.Duration, bool) {
 	return time.Duration(e.Argument) * time.Second, true
 }
 
+// IsFloodWaitFamily reports whether e is any flood-wait variant.
+// This includes FLOOD_WAIT, FLOOD_PREMIUM_WAIT, FLOOD_TEST_PHONE_WAIT,
+// and SLOWMODE_WAIT.
+func (e *Error) IsFloodWaitFamily() bool {
+	if e == nil {
+		return false
+	}
+	switch e.Type {
+	case ErrFloodWait, ErrFloodPremiumWait, ErrFloodTestPhoneWait, ErrSlowModeWait:
+		return e.Argument >= 0
+	default:
+		return false
+	}
+}
+
+// FloodWaitDuration extracts the wait duration from any flood variant.
+// FLOOD_WAIT_0 is normalized to 1 second to avoid tight retry loops
+// seen on test servers.
+func (e *Error) FloodWaitDuration() (time.Duration, bool) {
+	if e == nil {
+		return 0, false
+	}
+	switch e.Type {
+	case ErrFloodWait, ErrFloodPremiumWait, ErrFloodTestPhoneWait, ErrSlowModeWait:
+		if e.Argument < 0 {
+			return 0, false
+		}
+		seconds := e.Argument
+		if seconds == 0 {
+			seconds = 1
+		}
+		return time.Duration(seconds) * time.Second, true
+	default:
+		return 0, false
+	}
+}
+
 func (e *Error) Transient() bool {
 	return e != nil && (e.Code == 500 || e.Code == 420)
 }

@@ -27,6 +27,19 @@ func InvokeRaw(ctx context.Context, client *Client, request tl.Object) ([]byte, 
 	return result.Payload, nil
 }
 
+// applyMiddleware composes the middleware chain around invoke. When
+// middlewares is nil or empty, invoke is returned unchanged.
+func applyMiddleware(middlewares []Middleware, invoke InvokeFunc) InvokeFunc {
+	if len(middlewares) == 0 {
+		return invoke
+	}
+	chain := invoke
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		chain = middlewares[i].Handle(chain)
+	}
+	return chain
+}
+
 // InvokeWithOptions connects the default primary route on first use. Explicit
 // DC, connection-kind, and slot selections must already be connected.
 func InvokeWithOptions[T any](ctx context.Context, client *Client, request tl.Request[T], options InvokeOptions) (T, error) {
@@ -35,6 +48,12 @@ func InvokeWithOptions[T any](ctx context.Context, client *Client, request tl.Re
 		return zero, ErrNotConnected
 	}
 	maxAttempts := max(client.config.Retry.MaxAttempts, 1)
+	maxFloodWait := client.config.Retry.MaxFloodWait
+	method := request.ConstructorID()
+	if err := client.floodWait.check(ctx, method, maxFloodWait, defaultFloodWaitStoreMinWait); err != nil {
+		var zero T
+		return zero, err
+	}
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		result, err := invokeWithMigration(ctx, client, request, options)
 		if err == nil {
@@ -44,10 +63,11 @@ func InvokeWithOptions[T any](ctx context.Context, client *Client, request tl.Re
 		if !ok {
 			return result, err
 		}
-		if wait, ok := rpcError.FloodWait(); ok {
-			if client.config.Retry.MaxFloodWait <= 0 || wait > client.config.Retry.MaxFloodWait || attempt == maxAttempts {
+		if wait, ok := rpcError.FloodWaitDuration(); ok {
+			if maxFloodWait <= 0 || wait > maxFloodWait || attempt == maxAttempts {
 				return result, err
 			}
+			client.floodWait.record(method, wait, rpcError.IsType(tgerr.ErrSlowModeWait))
 			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():

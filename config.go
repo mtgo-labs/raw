@@ -61,7 +61,20 @@ func (auth AuthKeyConfig) Expired(now time.Time) bool {
 }
 
 type RetryPolicy struct {
-	MaxAttempts  int
+	// MaxAttempts limits the total number of send attempts per RPC,
+	// including retries for transient and flood-wait errors. A value
+	// <= 0 defaults to 1 (no retries).
+	MaxAttempts int
+
+	// MaxFloodWait is the longest FLOOD_WAIT duration the client will
+	// honour. Waits exceeding this value are returned to the caller as
+	// errors instead of being retried. A value <= 0 disables automatic
+	// flood-wait retry; the error is returned immediately.
+	//
+	// When MaxFloodWait > 0, the client also enables proactive
+	// per-method flood-wait tracking: after a method receives
+	// FLOOD_WAIT_X, subsequent requests for the same method are
+	// delayed or rejected before being sent.
 	MaxFloodWait time.Duration
 }
 
@@ -86,6 +99,7 @@ const (
 	TransportIntermediate TransportKind = iota
 	TransportAbridged
 	TransportPaddedIntermediate
+	TransportHTTP
 )
 
 // DialFunc establishes the underlying TCP connection to a Telegram DC.
@@ -93,6 +107,31 @@ const (
 // returned connection must implement net.Conn and is wrapped by the
 // transport layer (PacketConn or obfuscation) before use.
 type DialFunc func(ctx context.Context, address string) (net.Conn, error)
+
+// InvokeFunc is a raw RPC invocation function. It encodes the request,
+// sends it over the client's primary route, and returns the raw response
+// body. Middleware wraps InvokeFunc to add cross-cutting behavior
+// (logging, metrics, retry, tracing) without modifying the core library.
+type InvokeFunc func(ctx context.Context, request tl.Object) ([]byte, error)
+
+// Middleware intercepts RPC invocations. Each middleware receives the
+// next InvokeFunc in the chain and returns a new InvokeFunc that may
+// modify the request, call next (possibly multiple times), and modify
+// or observe the response. The chain is composed from outermost to
+// innermost: the first middleware in the slice is called first, and the
+// last middleware wraps the actual route invocation.
+//
+// When Config.Middlewares is nil or empty, the chain is a no-op with
+// zero allocation overhead on the hot path.
+type Middleware interface {
+	Handle(next InvokeFunc) InvokeFunc
+}
+
+// MiddlewareFunc is a function adapter for Middleware.
+type MiddlewareFunc func(next InvokeFunc) InvokeFunc
+
+// Handle implements Middleware.
+func (m MiddlewareFunc) Handle(next InvokeFunc) InvokeFunc { return m(next) }
 
 type ProxyKind uint8
 
@@ -150,6 +189,14 @@ type Config struct {
 	// for a CloudWeGo/netpoll-based implementation.
 	DialFunc DialFunc
 	Proxy    ProxyConfig
+	// Middlewares compose an RPC interceptor chain. Each middleware wraps the
+	// next InvokeFunc in the chain. The chain is composed from outermost to
+	// innermost: Config.Middlewares[0] is called first, then [1], …, and
+	// the innermost call reaches the actual MTProto route invocation.
+	// When nil or empty, the chain is a no-op with zero overhead.
+	//
+	// See github.com/mtgo-labs/contrib/middleware for implementations.
+	Middlewares []Middleware
 	Store    session.Store
 	Logger          *slog.Logger
 	PendingCapacity int
@@ -181,7 +228,7 @@ func (config Config) validate() error {
 	if config.DCID < 0 || config.DCID > int(^uint32(0)>>1) {
 		return fmt.Errorf("%w: dc_id %d is invalid", ErrInvalidConfig, config.DCID)
 	}
-	if config.Transport > TransportPaddedIntermediate {
+	if config.Transport > TransportHTTP {
 		return fmt.Errorf("%w: transport %d is invalid", ErrInvalidConfig, config.Transport)
 	}
 	if config.Proxy.Kind > ProxySOCKS5 {

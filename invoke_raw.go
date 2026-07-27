@@ -29,6 +29,11 @@ func InvokeWithRawResult(ctx context.Context, client *Client, request tl.Object)
 		return RawResult{}, ErrNotConnected
 	}
 	maxAttempts := max(client.config.Retry.MaxAttempts, 1)
+	maxFloodWait := client.config.Retry.MaxFloodWait
+	method := request.ConstructorID()
+	if err := client.floodWait.check(ctx, method, maxFloodWait, defaultFloodWaitStoreMinWait); err != nil {
+		return RawResult{}, err
+	}
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		result, err := invokeWithRawResult(ctx, client, request, InvokeOptions{})
 		if err == nil {
@@ -38,18 +43,49 @@ func InvokeWithRawResult(ctx context.Context, client *Client, request tl.Object)
 		if !ok {
 			return result, err
 		}
-		if wait, ok := rpcError.FloodWait(); ok {
-			if client.config.Retry.MaxFloodWait <= 0 || wait > client.config.Retry.MaxFloodWait || attempt == maxAttempts {
+		if wait, ok := rpcError.FloodWaitDuration(); ok {
+			if maxFloodWait <= 0 || wait > maxFloodWait || attempt == maxAttempts {
 				return result, err
 			}
+			client.floodWait.record(method, wait, rpcError.IsType(tgerr.ErrSlowModeWait))
 			select {
 			case <-time.After(wait):
 			case <-ctx.Done():
 				return result, ctx.Err()
 			}
+			continue
 		}
 	}
 	return RawResult{}, ErrNotConnected
+}
+
+// InvokeRawWithMiddleware is like InvokeWithRawResult but applies
+// the configured middleware chain to each RPC invocation. Unlike
+// InvokeWithRawResult, it does NOT perform automatic retry — the
+// retry loop is left to the caller or to retry middleware in the
+// chain. Migration and flood-wait handling are still performed.
+//
+// When Config.Middlewares is empty, this is equivalent to calling
+// InvokeWithRawResult.
+func InvokeRawWithMiddleware(ctx context.Context, client *Client, request tl.Object) (RawResult, error) {
+	if client == nil {
+		return RawResult{}, ErrNotConnected
+	}
+	rawInvoke := applyMiddleware(client.config.Middlewares, func(ctx context.Context, req tl.Object) ([]byte, error) {
+		result, err := invokeWithRawResult(ctx, client, req, InvokeOptions{})
+		if err != nil {
+			return nil, err
+		}
+		return append(
+			binary.LittleEndian.AppendUint32(nil, result.Constructor),
+			result.Payload...,
+		), nil
+	})
+	raw, err := rawInvoke(ctx, request)
+	if err != nil {
+		return RawResult{}, err
+	}
+	return rawResult(raw), nil
 }
 
 func invokeWithRawResult(ctx context.Context, client *Client, request tl.Object, options InvokeOptions) (RawResult, error) {

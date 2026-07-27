@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+	"net/http"
 	"runtime"
 	"slices"
 	"sync"
@@ -85,6 +86,7 @@ type Client struct {
 	closed             bool
 	updates            chan tl.UpdatesClass
 	pool               *mtproto.ConnectionPool
+	httpClient         *http.Client
 	routes             map[routeKey]*clientRoute
 	endpoints          *mtproto.EndpointTable
 	now                func() time.Time
@@ -105,6 +107,7 @@ type Client struct {
 	liveness           map[routeKey]*routeLiveness
 	pingJitter         func() time.Duration
 	nextPingID         func() (int64, error)
+	floodWait          *floodWaitStore
 }
 
 type routeKey struct {
@@ -266,6 +269,18 @@ func NewClient(config Config) (*Client, error) {
 		reconnectCtx:  reconnectCtx,
 		stopReconnect: stopReconnect,
 		liveness:      make(map[routeKey]*routeLiveness),
+		floodWait:     newFloodWaitStore(),
+	}
+	if config.Transport == TransportHTTP {
+		client.httpClient = &http.Client{
+			Transport: &http.Transport{
+				MaxIdleConns:          1,
+				MaxIdleConnsPerHost:   1,
+				IdleConnTimeout:       90 * time.Second,
+				DisableCompression:    true,
+				ResponseHeaderTimeout: 30 * time.Second,
+			},
+		}
 	}
 	client.reconnectDelay = client.defaultReconnectDelay
 	client.pingJitter = client.defaultPingJitter
@@ -410,6 +425,19 @@ func (client *Client) dialPacket(ctx context.Context, address string) (net.Conn,
 	if ctx == nil {
 		return nil, context.Canceled
 	}
+	if client.config.Transport == TransportHTTP {
+		if client.httpClient == nil {
+			return nil, errors.New("raw: HTTP transport selected but http client is nil")
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		conn, err := transport.NewHTTPConn(client.httpClient, address)
+		if err != nil {
+			return nil, err
+		}
+		return conn, nil
+	}
 	var connection net.Conn
 	var err error
 	if client.config.Proxy.Kind == ProxyHTTPConnect {
@@ -433,6 +461,9 @@ func (client *Client) dialPacket(ctx context.Context, address string) (net.Conn,
 }
 
 func (client *Client) wrapPacket(connection net.Conn) (net.Conn, error) {
+	if client.config.Transport == TransportHTTP {
+		return connection, nil
+	}
 	if !client.config.Obfuscate {
 		if err := transport.WritePacketHeader(connection, transport.PacketMode(client.config.Transport)); err != nil {
 			_ = connection.Close()

@@ -185,3 +185,50 @@ func TestFloodWaitAndTransient(t *testing.T) {
 		t.Fatal("flood error is not transient")
 	}
 }
+
+func TestFloodWaitAny(t *testing.T) {
+	tests := []struct {
+		message  string
+		wantType string
+		wantWait time.Duration
+	}{
+		{"FLOOD_WAIT_7", ErrFloodWait, 7 * time.Second},
+		{"FLOOD_WAIT_0", ErrFloodWait, 1 * time.Second},
+		{"FLOOD_PREMIUM_WAIT_3", ErrFloodPremiumWait, 3 * time.Second},
+		{"FLOOD_TEST_PHONE_WAIT_5", ErrFloodTestPhoneWait, 5 * time.Second},
+		{"SLOWMODE_WAIT_10", ErrSlowModeWait, 10 * time.Second},
+	}
+	for _, test := range tests {
+		t.Run(test.message, func(t *testing.T) {
+			err := New(CodeFlood, test.message)
+			if !err.IsFloodWaitFamily() {
+				t.Fatal("IsFloodWaitFamily returned false")
+			}
+			if wait, ok := err.FloodWaitDuration(); !ok || wait != test.wantWait {
+				t.Fatalf("FloodWaitDuration = %v, %v; want %v, true", wait, ok, test.wantWait)
+			}
+			if err.Type != test.wantType {
+				t.Fatalf("Type = %q; want %q", err.Type, test.wantType)
+			}
+		})
+	}
+}
+
+func TestFloodWaitAnyNonFlood(t *testing.T) {
+	for _, msg := range []string{"TIMEOUT", "AUTH_KEY_UNREGISTERED", "FLOOD_WAIT_-1"} {
+		err := New(CodeBadRequest, msg)
+		if err.IsFloodWaitFamily() {
+			t.Fatalf("%q: IsFloodWaitFamily returned true", msg)
+		}
+		if _, ok := err.FloodWaitDuration(); ok {
+			t.Fatalf("%q: FloodWaitDuration returned true", msg)
+		}
+	}
+	var nilErr *Error
+	if nilErr.IsFloodWaitFamily() {
+		t.Fatal("nil: IsFloodWaitFamily returned true")
+	}
+	if _, ok := nilErr.FloodWaitDuration(); ok {
+		t.Fatal("nil: FloodWaitDuration returned true")
+	}
+}
