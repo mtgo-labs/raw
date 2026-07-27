@@ -214,7 +214,7 @@ func TestNewClientAppliesTestAndConfiguredAddressDefaults(t *testing.T) {
 }
 
 func TestNewClientRejectsUnknownTransport(t *testing.T) {
-	if _, err := NewClient(Config{APIID: 1, Address: "127.0.0.1:1", Transport: 3}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := NewClient(Config{APIID: 1, Address: "127.0.0.1:1", Transport: 4}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("err=%v", err)
 	}
 }
