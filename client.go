@@ -465,6 +465,17 @@ func (client *Client) wrapPacket(connection net.Conn) (net.Conn, error) {
 		return connection, nil
 	}
 	if !client.config.Obfuscate {
+		if packetConnection, ok := connection.(PacketTransportConn); ok {
+			if err := packetConnection.ConfigurePacketTransport(uint8(client.config.Transport)); err != nil {
+				_ = connection.Close()
+				return nil, err
+			}
+			if err := transport.WritePacketHeader(connection, transport.PacketMode(client.config.Transport)); err != nil {
+				_ = connection.Close()
+				return nil, err
+			}
+			return packetConnection, nil
+		}
 		if err := transport.WritePacketHeader(connection, transport.PacketMode(client.config.Transport)); err != nil {
 			_ = connection.Close()
 			return nil, err

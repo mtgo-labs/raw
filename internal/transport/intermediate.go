@@ -30,6 +30,19 @@ func ReadPacket(reader io.Reader, maxPayload int) ([]byte, error) {
 	return ReadIntermediate(reader, maxPayload)
 }
 
+func ReadPacketView(reader io.Reader, maxPayload int, consume func([]byte) error) error {
+	if packetReader, ok := reader.(interface {
+		ReadPacketView(int, func([]byte) error) error
+	}); ok {
+		return packetReader.ReadPacketView(maxPayload, consume)
+	}
+	payload, err := ReadPacket(reader, maxPayload)
+	if err != nil {
+		return err
+	}
+	return consume(payload)
+}
+
 // WriteIntermediate writes one intermediate-transport packet without copying
 // payload. The payload length must be a non-zero multiple of four bytes.
 func WriteIntermediate(writer io.Writer, payload []byte) error {

@@ -102,10 +102,31 @@ const (
 	TransportHTTP
 )
 
+// PacketTransportConn is a packet-aware MTProto connection supplied by a
+// DialFunc. Non-obfuscated TCP transports configure and use it directly.
+// ConfigurePacketTransport is called once with the uint8 value of TransportKind
+// before the transport marker is sent.
+// Values 0, 1, and 2 select intermediate, abridged, and padded-intermediate
+// framing respectively; other values are not passed to packet transports.
+// ReadPacket and ReadPlainPacket return caller-owned buffers; ReadPlainPacket
+// removes any transport padding. Write methods must not retain caller buffers
+// after returning. Implementations may additionally provide ReadPacketView(int,
+// func([]byte) error) error to expose a borrowed packet only for the callback's
+// lifetime and must return the callback's error.
+type PacketTransportConn interface {
+	net.Conn
+	ConfigurePacketTransport(uint8) error
+	ReadPacket(int) ([]byte, error)
+	WritePacket([]byte) error
+	WritePacketReserved([]byte, int) error
+	ReadPlainPacket(int) ([]byte, error)
+	WritePlainPacket(uint64, []byte) error
+}
+
 // DialFunc establishes the underlying TCP connection to a Telegram DC.
-// When Config.DialFunc is set, it replaces the default net.Dialer. The
-// returned connection must implement net.Conn and is wrapped by the
-// transport layer (PacketConn or obfuscation) before use.
+// When Config.DialFunc is set, it replaces the default net.Dialer. A
+// PacketTransportConn is used directly for non-obfuscated TCP; other
+// connections retain the generic packet or obfuscation wrappers.
 type DialFunc func(ctx context.Context, address string) (net.Conn, error)
 
 // InvokeFunc is a raw RPC invocation function. It encodes the request,

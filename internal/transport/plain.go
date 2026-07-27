@@ -35,9 +35,9 @@ func WritePlain(writer io.Writer, messageID uint64, body []byte) error {
 		return ErrPlainBody
 	}
 	if packetWriter, ok := writer.(interface {
-		writePlainPacket(uint64, []byte) error
+		WritePlainPacket(uint64, []byte) error
 	}); ok {
-		return packetWriter.writePlainPacket(messageID, body)
+		return packetWriter.WritePlainPacket(messageID, body)
 	}
 	return writePlainIntermediate(writer, messageID, body)
 }
@@ -89,9 +89,9 @@ func ReadPlain(reader io.Reader, maxBody int) (PlainMessage, error) {
 }
 func readPlainPacket(reader io.Reader, maxPayload int) ([]byte, error) {
 	if packetReader, ok := reader.(interface {
-		readPlainPacket(int) ([]byte, error)
+		ReadPlainPacket(int) ([]byte, error)
 	}); ok {
-		return packetReader.readPlainPacket(maxPayload)
+		return packetReader.ReadPlainPacket(maxPayload)
 	}
 	return ReadPacket(reader, maxPayload)
 }

@@ -91,11 +91,17 @@ func (session *Session) Receive(reader io.Reader, maxPayload int) (InboundResult
 	if session == nil || session.closed.Load() {
 		return InboundResult{}, 0, 0, ErrSessionClosed
 	}
-	payload, err := transport.ReadPacket(reader, maxPayload)
-	if err != nil {
-		return InboundResult{}, 0, 0, err
-	}
-	return ReceiveSessionPayload(payload, session.state, session.pending, *session.authKey.Load())
+	var (
+		result     InboundResult
+		messageID  uint64
+		sequenceNo uint32
+	)
+	err := transport.ReadPacketView(reader, maxPayload, func(payload []byte) error {
+		var err error
+		result, messageID, sequenceNo, err = ReceiveSessionPayload(payload, session.state, session.pending, *session.authKey.Load())
+		return err
+	})
+	return result, messageID, sequenceNo, err
 }
 
 func (session *Session) NeedsFutureSalts() bool {

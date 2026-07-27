@@ -38,11 +38,17 @@ func ReceiveSessionObject(reader io.Reader, state *SessionState, pending *Pendin
 	if state == nil || pending == nil {
 		return InboundResult{}, 0, 0, ErrSessionControl
 	}
-	payload, err := transport.ReadPacket(reader, maxPayload)
-	if err != nil {
-		return InboundResult{}, 0, 0, err
-	}
-	return receiveSessionPayloadAt(payload, state, pending, authKey, time.Now())
+	var (
+		result     InboundResult
+		messageID  uint64
+		sequenceNo uint32
+	)
+	err := transport.ReadPacketView(reader, maxPayload, func(payload []byte) error {
+		var err error
+		result, messageID, sequenceNo, err = receiveSessionPayloadAt(payload, state, pending, authKey, time.Now())
+		return err
+	})
+	return result, messageID, sequenceNo, err
 }
 
 // ReceiveSessionPayload decrypts one already-framed packet. Session uses this

@@ -93,7 +93,8 @@ func (connection *PacketConn) WritePacketReserved(packet []byte, payloadOffset i
 	}
 	return nil
 }
-func (connection *PacketConn) writePlainPacket(messageID uint64, body []byte) error {
+
+func (connection *PacketConn) WritePlainPacket(messageID uint64, body []byte) error {
 	if connection.mode == PacketIntermediate {
 		return writePlainIntermediate(connection.Conn, messageID, body)
 	}
@@ -109,7 +110,8 @@ func (connection *PacketConn) ReadPacket(maxPayload int) ([]byte, error) {
 	}
 	return ReadIntermediate(connection.reader, maxPayload)
 }
-func (connection *PacketConn) readPlainPacket(maxPayload int) ([]byte, error) {
+
+func (connection *PacketConn) ReadPlainPacket(maxPayload int) ([]byte, error) {
 	if connection.mode == PacketPaddedIntermediate {
 		return readPaddedIntermediatePayload(connection.reader, maxPayload)
 	}
