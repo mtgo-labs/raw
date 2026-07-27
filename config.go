@@ -196,8 +196,8 @@ type Config struct {
 	// When nil or empty, the chain is a no-op with zero overhead.
 	//
 	// See github.com/mtgo-labs/contrib/middleware for implementations.
-	Middlewares []Middleware
-	Store    session.Store
+	Middlewares     []Middleware
+	Store           session.Store
 	Logger          *slog.Logger
 	PendingCapacity int
 	MaxPayload      int
