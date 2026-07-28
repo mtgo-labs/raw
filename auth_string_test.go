@@ -93,11 +93,16 @@ func TestNewClientAutomaticallyImportsPyrogramTelethonAndRaw(t *testing.T) {
 			}
 		})
 	}
-	if _, err := NewClient(Config{
+	client, err := NewClient(Config{
 		APIID:         1,
 		SessionString: base64.RawURLEncoding.EncodeToString(pyrogram),
-	}); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("API ID conflict err=%v", err)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if client.config.APIID != 1 {
+		t.Fatalf("config APIID should be 1, got %d", client.config.APIID)
 	}
 	if !bytes.Equal(encryptionKey, bytes.Repeat([]byte{0x91}, 32)) {
 		t.Fatal("NewClient modified the caller-owned encryption key")
