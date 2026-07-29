@@ -93,6 +93,18 @@ type LivenessPolicy struct {
 	PongTimeout  time.Duration
 }
 
+// PFSPolicy controls Perfect Forward Secrecy via temporary auth keys.
+// When Enabled is true, the client automatically negotiates a temporary key
+// after connecting with its permanent key and binds it via
+// auth.bindTempAuthKey. The temporary key encrypts all traffic and rotates
+// before Lifetime expires. Telegram allows at most 24 hours (86400 s).
+type PFSPolicy struct {
+	Enabled bool
+	// Lifetime is the temporary key TTL. Zero defaults to 24 hours.
+	// Values above 24 hours are clamped to 24 hours.
+	Lifetime time.Duration
+}
+
 type TransportKind uint8
 
 const (
@@ -231,6 +243,7 @@ type Config struct {
 	Retry             RetryPolicy
 	Reconnect         ReconnectPolicy
 	Liveness          LivenessPolicy
+	PFS               PFSPolicy
 	InitConnection    InitConnectionConfig
 	AuthKey           []byte
 	AuthKeyID         uint64

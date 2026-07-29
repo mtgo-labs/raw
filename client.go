@@ -71,6 +71,7 @@ func defaultTelegramAddress(dcid int, testMode bool) (string, bool) {
 
 type Client struct {
 	mu                 sync.Mutex
+	pfsMu              sync.Mutex
 	writeMu            sync.Mutex
 	sendMu             sync.Mutex
 	sendWG             sync.WaitGroup
@@ -563,6 +564,7 @@ func (client *Client) Connect(ctx context.Context) error {
 	client.conn = connection
 	client.session = sessionState
 	client.permanent = state
+	client.pfs = nil
 	client.tempUntil = 0
 	client.initConnectionDone = false
 	client.err = nil
@@ -920,6 +922,7 @@ func (client *Client) disconnectLocked() {
 		_ = client.pool.Discard(mtproto.PoolKey{DCID: client.config.DCID, Kind: mtproto.ConnectionMain, Slot: 0}, client.conn)
 		client.conn = nil
 	}
+	client.pfs = nil
 	client.tempUntil = 0
 	client.initConnectionDone = false
 	client.connectFlood = make(map[routeKey]*connectionFloodControl)

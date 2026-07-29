@@ -125,6 +125,7 @@ func invokeRoute[T any](ctx context.Context, client *Client, request tl.Request[
 		return zero, ErrNotConnected
 	}
 	connectAttempted := false
+	pfsAttempted := false
 selectRoute:
 	client.mu.Lock()
 	if options.Kind > ConnectionDownload || options.Slot < 0 {
@@ -147,6 +148,17 @@ selectRoute:
 		dcid = client.config.DCID
 	}
 	selectedKey := routeKey{dcid: dcid, kind: options.Kind, slot: options.Slot}
+	if client.config.PFS.Enabled && client.routeNeedsPFSLocked(selectedKey) {
+		client.mu.Unlock()
+		if pfsAttempted {
+			return zero, ErrPFSRebindRequired
+		}
+		pfsAttempted = true
+		if err := client.connectPFS(ctx, InvokeOptions{DCID: dcid, Kind: options.Kind, Slot: options.Slot}); err != nil {
+			return zero, err
+		}
+		goto selectRoute
+	}
 	if _, invalid := client.pfsInvalid[selectedKey]; invalid {
 		client.mu.Unlock()
 		return zero, ErrPFSRebindRequired

@@ -35,6 +35,42 @@ func AuthorizePermanent(
 	dcID int32,
 	store AuthKeyStore,
 ) (AuthKey, error) {
+	if store == nil {
+		return AuthKey{}, ErrNilAuthKeyStore
+	}
+	return authorizeKey(ctx, connection, random, now, dcID, 0, store)
+}
+
+// AuthorizeTemp negotiates one temporary MTProto authorization key for PFS
+// over a newly connected plain transport. The key expires after expiresIn
+// seconds (at most 86400). It is not persisted; the caller must bind it to a
+// permanent key via auth.bindTempAuthKey before use.
+func AuthorizeTemp(
+	ctx context.Context,
+	connection net.Conn,
+	random io.Reader,
+	now func() time.Time,
+	dcID, expiresIn int32,
+) (AuthKey, error) {
+	if expiresIn <= 0 {
+		return AuthKey{}, ErrInvalidAuthorization
+	}
+	return authorizeKey(ctx, connection, random, now, dcID, expiresIn, func(AuthKey) error { return nil })
+}
+
+// authorizeKey runs the DH key exchange shared by permanent and temporary
+// authorization. When expiresIn is zero, the permanent p_q_inner_data_dc
+// variant is used; otherwise the temporary p_q_inner_data_temp_dc variant
+// carries the expiry. The store callback runs synchronously after the server
+// confirms the key.
+func authorizeKey(
+	ctx context.Context,
+	connection net.Conn,
+	random io.Reader,
+	now func() time.Time,
+	dcID, expiresIn int32,
+	store AuthKeyStore,
+) (AuthKey, error) {
 	if ctx == nil || connection == nil || dcID <= 0 {
 		return AuthKey{}, ErrInvalidAuthorization
 	}
@@ -88,7 +124,12 @@ func AuthorizePermanent(
 	if _, err := io.ReadFull(random, newNonce[:]); err != nil {
 		return AuthKey{}, fmt.Errorf("%w: generate new nonce: %v", ErrInvalidAuthorization, err)
 	}
-	requestDH, err := BuildPQInnerData(random, selection, resPQ.PQ, nonce, resPQ.ServerNonce, newNonce, dcID)
+	var requestDH *tl.MTPReqDHParams
+	if expiresIn > 0 {
+		requestDH, err = BuildPQInnerDataTemp(random, selection, resPQ.PQ, nonce, resPQ.ServerNonce, newNonce, dcID, expiresIn)
+	} else {
+		requestDH, err = BuildPQInnerData(random, selection, resPQ.PQ, nonce, resPQ.ServerNonce, newNonce, dcID)
+	}
 	if err != nil {
 		return AuthKey{}, err
 	}
