@@ -95,7 +95,7 @@ jobs:
           fuzz ./tl FuzzDecodeGzipPacked
           fuzz ./internal/cryptoutil FuzzAESIGERoundTrip
           fuzz ./internal/cryptoutil FuzzValidateDHParams
-          fuzz ./internal/cryptoutil FuzzMessageDerivation
+          go test -run '^$' -fuzz '^FuzzMessageDerivation$' -fuzztime=100000x ./internal/cryptoutil
           fuzz ./internal/cryptoutil FuzzFactorPQ
           fuzz ./internal/cryptoutil FuzzEncryptRSAPadded
           fuzz ./internal/mtproto FuzzRouteInboundContainer
