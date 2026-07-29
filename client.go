@@ -352,55 +352,93 @@ func (client *Client) ConnectDCSlot(ctx context.Context, dcid int, kind Connecti
 	if dcid == client.config.DCID && kind == ConnectionMain && slot == 0 {
 		return client.Connect(ctx)
 	}
+	if client.config.PFS.Enabled {
+		client.pfsMu.Lock()
+		defer client.pfsMu.Unlock()
+	}
+	return client.connectDCSlot(ctx, dcid, kind, slot)
+}
+
+func (client *Client) connectDCSlot(ctx context.Context, dcid int, kind ConnectionKind, slot int) error {
+	binding, err := client.openDCSlotConnection(ctx, dcid, kind, slot)
+	if err != nil || binding == nil {
+		return err
+	}
+	options := InvokeOptions{DCID: dcid, Kind: kind, Slot: slot}
+	if err := client.BindTemporaryAuthKeyWithOptions(ctx, options, binding); err != nil {
+		client.disconnectPFSRoute(options)
+		return err
+	}
+	keyRoute := routeKey{dcid: dcid, kind: kind, slot: slot}
+	client.mu.Lock()
+	if route := client.routes[keyRoute]; route != nil {
+		client.startRouteLivenessLocked(
+			keyRoute,
+			route.session,
+			route.connection,
+			&route.writeMu,
+		)
+	}
+	client.mu.Unlock()
+	return nil
+}
+
+func (client *Client) openDCSlotConnection(ctx context.Context, dcid int, kind ConnectionKind, slot int) (*PFSBinding, error) {
 	slotLimit := client.config.PoolSize
 	if dcid == client.config.DCID && kind == ConnectionMain {
 		slotLimit = client.TemporarySessionLimit()
 	}
 	if slot >= slotLimit {
-		return ErrUnsupportedRoute
+		return nil, ErrUnsupportedRoute
 	}
 	keyRoute := routeKey{dcid: dcid, kind: kind, slot: slot}
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if client.closed {
-		return mtproto.ErrSessionClosed
+		return nil, mtproto.ErrSessionClosed
 	}
 	if _, ok := client.routes[keyRoute]; ok {
-		return nil
+		return nil, nil
 	}
 	var key mtproto.AuthKey
 	var salt int64
 	var sessionID [8]byte
+	var permanent AuthKeyConfig
 	if dcid == client.config.DCID {
 		if client.permanent.key.ID == 0 {
-			return ErrNoAuthKey
+			return nil, ErrNoAuthKey
 		}
 		key, salt = client.permanent.key, client.permanent.salt
+		permanent = AuthKeyConfig{
+			Key: append([]byte(nil), key.Key[:]...),
+			ID:  key.ID,
+		}
 	} else {
 		auth, ok := client.config.DCAuthKeys[dcid]
 		if !ok {
-			return ErrNoAuthKey
+			return nil, ErrNoAuthKey
 		}
 		if auth.Expired(client.now()) {
-			return ErrAuthKeyExpired
+			return nil, ErrAuthKeyExpired
 		}
 		var err error
 		key, err = mtproto.RestoreAuthKey(auth.Key, auth.ID, auth.TimeOffset)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		salt, sessionID = auth.Salt, auth.SessionID
+		permanent = auth
 	}
 	if sessionID == [8]byte{} || slot > 0 {
 		if _, err := rand.Read(sessionID[:]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	address := client.config.Address
 	if endpoint, ok := client.config.DCAddresses[dcid]; ok {
 		address = endpoint
 	} else if dcid != client.config.DCID {
-		return ErrUnsupportedRoute
+		return nil, ErrUnsupportedRoute
 	}
 	poolKey := mtproto.PoolKey{DCID: dcid, Kind: mtproto.ConnectionKind(kind), Slot: slot}
 	flood := client.connectionFloodLocked(keyRoute)
@@ -411,15 +449,37 @@ func (client *Client) ConnectDCSlot(ctx context.Context, dcid int, kind Connecti
 		return client.dialPacket(ctx, address)
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	route := &clientRoute{connection: connection, session: mtproto.NewSession(key, salt, sessionID, client.config.PendingCapacity)}
+	sessionState := mtproto.NewSession(key, salt, sessionID, client.config.PendingCapacity)
+	var binding *PFSBinding
+	var tempUntil int64
+	if client.config.PFS.Enabled {
+		sessionState, binding, tempUntil, err = client.preparePFSSession(
+			ctx,
+			connection,
+			dcid,
+			sessionID,
+			permanent,
+		)
+		if err != nil {
+			_ = client.pool.Discard(poolKey, connection)
+			return nil, err
+		}
+	}
+	route := &clientRoute{
+		connection: connection,
+		session:    sessionState,
+		tempUntil:  tempUntil,
+	}
 	client.routes[keyRoute] = route
 	route.sender = client.startRouteSenderLocked(keyRoute, route.session, route.connection, &route.writeMu)
 	client.resetRouteIdleTimerLocked(keyRoute, route)
-	client.startRouteLivenessLocked(keyRoute, route.session, route.connection, &route.writeMu)
+	if !client.config.PFS.Enabled {
+		client.startRouteLivenessLocked(keyRoute, route.session, route.connection, &route.writeMu)
+	}
 	client.startReceiveRouteLocked(keyRoute, route)
-	return nil
+	return binding, nil
 }
 
 func (client *Client) dialPacket(ctx context.Context, address string) (net.Conn, error) {
@@ -502,25 +562,60 @@ func (client *Client) Connect(ctx context.Context) error {
 	if ctx == nil {
 		return context.Canceled
 	}
+	if client.config.PFS.Enabled {
+		client.pfsMu.Lock()
+		defer client.pfsMu.Unlock()
+	}
+	return client.connectPrimary(ctx)
+}
+
+func (client *Client) connectPrimary(ctx context.Context) error {
+	binding, err := client.openPrimaryConnection(ctx)
+	if err != nil || binding == nil {
+		return err
+	}
+	options := InvokeOptions{
+		DCID: client.config.DCID,
+		Kind: ConnectionMain,
+		Slot: 0,
+	}
+	if err := client.BindTemporaryAuthKeyWithOptions(ctx, options, binding); err != nil {
+		client.disconnectPFSRoute(options)
+		return err
+	}
+	client.mu.Lock()
+	if client.session != nil && client.conn != nil {
+		client.startRouteLivenessLocked(
+			routeKey{dcid: client.config.DCID, kind: ConnectionMain, slot: 0},
+			client.session,
+			client.conn,
+			&client.writeMu,
+		)
+	}
+	client.mu.Unlock()
+	return nil
+}
+
+func (client *Client) openPrimaryConnection(ctx context.Context) (*PFSBinding, error) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if client.closed {
-		return mtproto.ErrSessionClosed
+		return nil, mtproto.ErrSessionClosed
 	}
 	if client.conn != nil {
-		return nil
+		return nil, nil
 	}
 	state, err := client.authState(ctx)
 	authorize := false
 	if errors.Is(err, ErrNoAuthKey) && client.config.Store != nil {
 		authorize = true
 	} else if err != nil {
-		return err
+		return nil, err
 	}
 	sessionID := state.sessionID
 	if sessionID == [8]byte{} {
 		if _, err := rand.Read(sessionID[:]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	poolKey := mtproto.PoolKey{DCID: client.config.DCID, Kind: mtproto.ConnectionMain, Slot: 0}
@@ -537,7 +632,7 @@ func (client *Client) Connect(ctx context.Context) error {
 		return client.dialPacket(ctx, address)
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if authorize {
 		state.sessionID = sessionID
@@ -555,17 +650,36 @@ func (client *Client) Connect(ctx context.Context) error {
 		)
 		if err != nil {
 			_ = client.pool.Discard(poolKey, connection)
-			return err
+			return nil, err
 		}
 		state.key = key
 	}
 	sessionState := mtproto.NewSession(state.key, state.salt, sessionID, client.config.PendingCapacity)
+	var binding *PFSBinding
+	var tempUntil int64
+	if client.config.PFS.Enabled {
+		permanent := AuthKeyConfig{
+			Key: append([]byte(nil), state.key.Key[:]...),
+			ID:  state.key.ID,
+		}
+		sessionState, binding, tempUntil, err = client.preparePFSSession(
+			ctx,
+			connection,
+			client.config.DCID,
+			sessionID,
+			permanent,
+		)
+		if err != nil {
+			_ = client.pool.Discard(poolKey, connection)
+			return nil, err
+		}
+	}
 	state.sessionID = sessionID
 	client.conn = connection
 	client.session = sessionState
 	client.permanent = state
 	client.pfs = nil
-	client.tempUntil = 0
+	client.tempUntil = tempUntil
 	client.initConnectionDone = false
 	client.err = nil
 	if !authorize {
@@ -574,15 +688,17 @@ func (client *Client) Connect(ctx context.Context) error {
 			sessionState.Close(err)
 			client.conn = nil
 			client.session = nil
-			return err
+			return nil, err
 		}
 	}
 	primaryRoute := &clientRoute{connection: connection, session: sessionState}
 	client.sender = client.startRouteSenderLocked(route, sessionState, connection, &client.writeMu)
 	primaryRoute.sender = client.sender
-	client.startRouteLivenessLocked(route, sessionState, connection, &client.writeMu)
+	if !client.config.PFS.Enabled {
+		client.startRouteLivenessLocked(route, sessionState, connection, &client.writeMu)
+	}
 	client.startReceiveRouteLocked(route, primaryRoute)
-	return nil
+	return binding, nil
 }
 
 // ActivateTemporaryAuthKey switches an existing route to a temporary key

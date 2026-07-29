@@ -205,7 +205,10 @@ func runAuthorizationServer(connection net.Conn, now time.Time, release <-chan s
 	if err != nil {
 		return mtproto.AuthKey{}, err
 	}
+	return runAuthorizationExchange(packet, now, release)
+}
 
+func runAuthorizationExchange(packet net.Conn, now time.Time, release <-chan struct{}) (mtproto.AuthKey, error) {
 	object, _, err := mtproto.ReceivePlainObject(packet, 4096)
 	if err != nil {
 		return mtproto.AuthKey{}, err

@@ -3,8 +3,9 @@ package raw
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
-	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -164,10 +165,14 @@ func (client *Client) bindTemporaryAuthKeyOnce(ctx context.Context, options Invo
 }
 
 // ReconnectTemporaryAuthKey reconnects one session slot and binds the newly
-// installed temporary key before that slot is used for ordinary RPCs.
+// installed temporary key before that slot is used for ordinary RPCs. It is
+// only for manually managed PFS; PFSPolicy.Enabled owns this lifecycle.
 func (client *Client) ReconnectTemporaryAuthKey(ctx context.Context, options InvokeOptions, binding *PFSBinding) error {
 	if client == nil || ctx == nil || binding == nil {
 		return ErrInvalidConfig
+	}
+	if client.config.PFS.Enabled {
+		return fmt.Errorf("%w: automatic PFS owns temporary-key reconnection", ErrInvalidConfig)
 	}
 	if _, err := binding.temporaryAt(client.now()); err != nil {
 		return err
@@ -192,11 +197,13 @@ func (client *Client) markPFSRoute(options InvokeOptions, binding *PFSBinding) {
 	if options.DCID == client.config.DCID && options.Kind == ConnectionMain && options.Slot == 0 {
 		client.pfs = binding
 		client.err = nil
+		client.initConnectionDone = false
 		delete(client.pfsInvalid, routeKey{dcid: options.DCID, kind: options.Kind, slot: options.Slot})
 		return
 	}
 	if route := client.routes[routeKey{dcid: options.DCID, kind: options.Kind, slot: options.Slot}]; route != nil {
 		route.pfs = binding
+		route.initConnectionDone = false
 		delete(client.pfsInvalid, routeKey{dcid: options.DCID, kind: options.Kind, slot: options.Slot})
 	}
 }
@@ -353,8 +360,8 @@ func sessionWriter(client *Client, dcid int, kind ConnectionKind, slot int) inte
 }
 
 // routeNeedsPFSLocked reports whether the route at key requires a PFS
-// (re)negotiation: no binding exists, the temp key expired, or the server
-// invalidated it (404). The caller must hold client.mu.
+// (re)negotiation: no binding exists, the temp key is nearing expiry, or the
+// server invalidated it (404). The caller must hold client.mu.
 func (client *Client) routeNeedsPFSLocked(key routeKey) bool {
 	if !client.config.PFS.Enabled {
 		return false
@@ -366,7 +373,7 @@ func (client *Client) routeNeedsPFSLocked(key routeKey) bool {
 		if client.pfs == nil {
 			return true
 		}
-		return client.tempUntil != 0 && client.tempUntil <= client.now().Unix()
+		return client.pfsRefreshDue(client.tempUntil)
 	}
 	route := client.routes[key]
 	if route == nil {
@@ -375,40 +382,22 @@ func (client *Client) routeNeedsPFSLocked(key routeKey) bool {
 	if route.pfs == nil {
 		return true
 	}
-	return route.tempUntil != 0 && route.tempUntil <= client.now().Unix()
+	return client.pfsRefreshDue(route.tempUntil)
 }
 
-// pfsBindingLocked returns the existing PFSBinding for the route, or creates
-// a new one from the permanent key. The caller must hold client.mu.
-func (client *Client) pfsBindingLocked(key routeKey) *PFSBinding {
-	if key.dcid == client.config.DCID && key.kind == ConnectionMain && key.slot == 0 {
-		if client.pfs != nil {
-			return client.pfs
-		}
-	} else if route := client.routes[key]; route != nil && route.pfs != nil {
-		return route.pfs
+func (client *Client) pfsRefreshDue(expiresAt int64) bool {
+	if expiresAt == 0 {
+		return false
 	}
-	if client.permanent.key.ID == 0 {
-		return nil
+	lifetime := int64(client.pfsLifetimeSeconds())
+	margin := lifetime / 4
+	if margin > int64(time.Hour/time.Second) {
+		margin = int64(time.Hour / time.Second)
 	}
-	binding, err := NewPFSBinding(AuthKeyConfig{
-		Key: append([]byte(nil), client.permanent.key.Key[:]...),
-		ID:  client.permanent.key.ID,
-	})
-	if err != nil {
-		return nil
+	if margin < 1 {
+		margin = 1
 	}
-	return binding
-}
-
-// routeConnectedLocked reports whether the route still has a live session and
-// connection. The caller must hold client.mu.
-func (client *Client) routeConnectedLocked(key routeKey) bool {
-	if key.dcid == client.config.DCID && key.kind == ConnectionMain && key.slot == 0 {
-		return client.conn != nil && client.session != nil
-	}
-	route := client.routes[key]
-	return route != nil && route.connection != nil && route.session != nil
+	return expiresAt <= client.now().Unix()+margin
 }
 
 // pfsLifetimeSeconds returns the configured temp key lifetime, clamped to
@@ -425,29 +414,18 @@ func (client *Client) pfsLifetimeSeconds() int32 {
 	return seconds
 }
 
-// negotiateTempAuthKey performs a DH exchange over a freshly dialed plain
-// connection to obtain one temporary authorization key. The connection is
-// closed after the exchange; it cannot be reused for session traffic.
-func (client *Client) negotiateTempAuthKey(ctx context.Context, dcid int, expiresIn int32) (AuthKeyConfig, error) {
-	address := client.config.Address
-	if endpoint, ok := client.config.DCAddresses[dcid]; ok {
-		address = endpoint
-	} else if dcid != client.config.DCID {
-		if addr, ok := defaultTelegramAddress(dcid, client.config.TestMode); ok {
-			address = addr
-		}
-	}
-	connection, err := client.dialPacket(ctx, address)
-	if err != nil {
-		return AuthKeyConfig{}, err
-	}
+// negotiateTempAuthKey performs a temporary-key DH exchange on a route's
+// existing, not-yet-exposed connection. The caller must start the encrypted
+// receive loop only after this function returns.
+func (client *Client) negotiateTempAuthKey(
+	ctx context.Context,
+	connection net.Conn,
+	dcid int,
+	sessionID [8]byte,
+	expiresIn int32,
+) (AuthKeyConfig, error) {
 	key, err := mtproto.AuthorizeTemp(ctx, connection, client.authRandom, client.now, int32(dcid), expiresIn)
-	_ = connection.Close()
 	if err != nil {
-		return AuthKeyConfig{}, err
-	}
-	var sessionID [8]byte
-	if _, err := io.ReadFull(rand.Reader, sessionID[:]); err != nil {
 		return AuthKeyConfig{}, err
 	}
 	keyBytes := make([]byte, 256)
@@ -455,16 +433,51 @@ func (client *Client) negotiateTempAuthKey(ctx context.Context, dcid int, expire
 	return AuthKeyConfig{
 		Key:        keyBytes,
 		ID:         key.ID,
+		Salt:       int64(binary.LittleEndian.Uint64(key.Salt[:])),
 		SessionID:  sessionID,
 		TimeOffset: key.TimeOffset,
 		ExpiresAt:  client.now().Unix() + int64(expiresIn),
 	}, nil
 }
 
-// connectPFS negotiates a temporary authorization key for the route identified
-// by options and binds it to the permanent key. It serializes concurrent PFS
-// negotiations for the same client via pfsMu. The client's mutex (client.mu)
-// must NOT be held.
+func (client *Client) preparePFSSession(
+	ctx context.Context,
+	connection net.Conn,
+	dcid int,
+	sessionID [8]byte,
+	permanent AuthKeyConfig,
+) (*mtproto.Session, *PFSBinding, int64, error) {
+	binding, err := NewPFSBinding(permanent)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	auth, err := client.negotiateTempAuthKey(
+		ctx,
+		connection,
+		dcid,
+		sessionID,
+		client.pfsLifetimeSeconds(),
+	)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if err := binding.InstallTemporary(auth); err != nil {
+		return nil, nil, 0, err
+	}
+	temporary, err := mtproto.RestoreAuthKey(auth.Key, auth.ID, auth.TimeOffset)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	return mtproto.NewSession(
+		temporary,
+		auth.Salt,
+		auth.SessionID,
+		client.config.PendingCapacity,
+	), binding, auth.ExpiresAt, nil
+}
+
+// connectPFS replaces one route and completes temporary-key negotiation on the
+// replacement connection before exposing it to ordinary RPCs.
 func (client *Client) connectPFS(ctx context.Context, options InvokeOptions) error {
 	client.pfsMu.Lock()
 	defer client.pfsMu.Unlock()
@@ -480,45 +493,11 @@ func (client *Client) connectPFS(ctx context.Context, options InvokeOptions) err
 		client.mu.Unlock()
 		return nil
 	}
-	binding := client.pfsBindingLocked(selectedKey)
-	salt := client.permanent.salt
-	if s := client.routeSessionSaltLocked(selectedKey); s != 0 {
-		salt = s
-	}
-	connected := client.routeConnectedLocked(selectedKey)
 	client.mu.Unlock()
 
-	if binding == nil {
-		return ErrInvalidConfig
+	client.disconnectPFSRoute(options)
+	if selectedKey == (routeKey{dcid: client.config.DCID, kind: ConnectionMain, slot: 0}) {
+		return client.connectPrimary(ctx)
 	}
-
-	expiresIn := client.pfsLifetimeSeconds()
-	auth, err := client.negotiateTempAuthKey(ctx, options.DCID, expiresIn)
-	if err != nil {
-		return err
-	}
-	auth.Salt = salt
-
-	if err := binding.InstallTemporary(auth); err != nil {
-		return err
-	}
-	if connected {
-		return client.BindTemporaryAuthKeyWithOptions(ctx, options, binding)
-	}
-	return client.ReconnectTemporaryAuthKey(ctx, options, binding)
-}
-
-// routeSessionSaltLocked returns the live session's server salt, or zero if
-// the route has no active session. The caller must hold client.mu.
-func (client *Client) routeSessionSaltLocked(key routeKey) int64 {
-	if key.dcid == client.config.DCID && key.kind == ConnectionMain && key.slot == 0 {
-		if client.session != nil {
-			return client.session.Salt()
-		}
-		return 0
-	}
-	if route := client.routes[key]; route != nil && route.session != nil {
-		return route.session.Salt()
-	}
-	return 0
+	return client.connectDCSlot(ctx, options.DCID, options.Kind, options.Slot)
 }

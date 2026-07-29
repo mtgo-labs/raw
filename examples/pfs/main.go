@@ -51,7 +51,7 @@ func run() error {
 		return err
 	}
 
-	// First invoke triggers temp key negotiation + auth.bindTempAuthKey.
+	// Connect negotiates and binds the temporary key before returning.
 	// This adds ~1s latency (one DH round-trip). Subsequent calls are instant.
 	users, err := raw.Invoke(ctx, client, &tl.UsersGetUsersRequest{
 		ID: []tl.InputUserClass{&tl.InputUserSelf{}},
