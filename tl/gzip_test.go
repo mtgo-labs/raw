@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"io"
 	"reflect"
 	"testing"
 )
@@ -210,6 +211,63 @@ func FuzzDecodeGzipPacked(f *testing.F) {
 		}
 		_, _ = Decode(input, limits)
 	})
+}
+
+func TestDecodeGzipPackedCustomDecompressor(t *testing.T) {
+
+	// Build a gzip_packed payload.
+	nearest := &NearestDC{Country: "US", ThisDC: 1, NearestDC: 2}
+	nearestInput, err := Encode(nearest)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	input := packGzipForTest(t, nearestInput)
+
+	// Use a custom decompressor that wraps stdlib gzip.
+	original := GzipDecompressor
+	GzipDecompressor = func(packed []byte, limit int) ([]byte, error) {
+		zr, err := gzip.NewReader(bytes.NewReader(packed))
+		if err != nil {
+			return nil, err
+		}
+		defer zr.Close()
+		return io.ReadAll(zr)
+	}
+	defer func() { GzipDecompressor = original }()
+
+	decoded, err := DecodeResult(&HelpGetNearestDCRequest{}, input, DefaultDecodeLimits())
+	if err != nil {
+		t.Fatalf("DecodeResult with custom decompressor: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, nearest) {
+		t.Fatalf("decoded = %#v, want %#v", decoded, nearest)
+	}
+}
+
+func TestGzipDecompressorBudgetExhaustion(t *testing.T) {
+
+	original := GzipDecompressor
+	GzipDecompressor = func(packed []byte, limit int) ([]byte, error) {
+		t.Errorf("decompressor called with exhausted budget (limit=%d)", limit)
+		return nil, errors.New("should not be called")
+	}
+	defer func() { GzipDecompressor = original }()
+
+	// Craft limits with zero decompression budget.
+	limits := DefaultDecodeLimits()
+	limits.MaxDecompressedBytes = 0
+
+	nearest := &NearestDC{Country: "X", ThisDC: 1, NearestDC: 2}
+	nearestInput, err := Encode(nearest)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	input := packGzipForTest(t, nearestInput)
+
+	_, err = Decode(input, limits)
+	if err == nil {
+		t.Fatal("expected error with exhausted decompression budget")
+	}
 }
 
 func BenchmarkGzipPackedDecode(b *testing.B) {

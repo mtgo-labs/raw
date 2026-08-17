@@ -65,6 +65,18 @@ type gzipDecoder struct {
 
 var gzipDecoderPool sync.Pool
 
+// GzipDecompressor, when non-nil, replaces the default stdlib gzip decoder for
+// gzip_packed payloads. The limit parameter is the remaining decompression
+// budget in bytes — the implementation must return an error if the
+// decompressed output would exceed it. The returned slice's cap is subtracted
+// from the budget.
+//
+// Set this before any decoding to swap in a faster implementation, e.g.:
+//
+//	import "github.com/mtgo-labs/contrib/compression"
+//	tl.GzipDecompressor = compression.Gunzip
+var GzipDecompressor func(packed []byte, limit int) ([]byte, error)
+
 // Decode parses one boxed API or MTProto constructor and rejects trailing data.
 func Decode(input []byte, limits DecodeLimits) (Object, error) {
 	decoder, err := newPublicDecoder(input, limits)
@@ -307,6 +319,19 @@ func (d *decoder) unpackGzip() error {
 }
 
 func (d *decoder) gunzip(packed []byte) ([]byte, error) {
+	if GzipDecompressor != nil {
+		limit := d.limits.decompressionLeft
+		if limit <= 0 {
+			return nil, gzipDecodeError(d.offset, fmt.Errorf(
+				"%w: decompression budget exhausted", ErrLimitExceeded))
+		}
+		out, err := GzipDecompressor(packed, limit)
+		if err != nil {
+			return nil, gzipDecodeError(d.offset, err)
+		}
+		d.limits.decompressionLeft -= cap(out)
+		return out, nil
+	}
 	pooled := gzipDecoderPool.Get()
 	var decoder *gzipDecoder
 	if pooled == nil {
