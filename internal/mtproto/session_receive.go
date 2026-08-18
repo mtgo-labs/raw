@@ -1,6 +1,7 @@
 package mtproto
 
 import (
+	"encoding/binary"
 	"io"
 	"time"
 
@@ -78,12 +79,11 @@ func receiveSessionPayloadAt(payload []byte, state *SessionState, pending *Pendi
 	// salt field, so an equality check is redundant for integrity. Validating
 	// it rejects legitimate messages after the server rotates its salt —
 	// mtcute never validates the incoming salt and updates the outgoing salt
-	// only via bad_server_salt / new_session_created / future_salts.
 	messageID, sequenceNo, body, envelopeSalt, err = decryptMessageWithoutExpectedSalt(authKey, sessionID, payload)
 	if err != nil {
 		return InboundResult{}, messageID, sequenceNo, err
 	}
-	object, err := tl.Decode(body, tl.DefaultDecodeLimits())
+	object, err := decodeInboundObject(body)
 	if err != nil {
 		return InboundResult{}, messageID, sequenceNo, err
 	}
@@ -362,4 +362,18 @@ func requiresAcknowledgement(object tl.Object) bool {
 	default:
 		return true
 	}
+}
+
+// decodeInboundObject decodes one inbound envelope body. rpc_result bodies
+// take a fast path: only req_msg_id is read and the inner result stays raw,
+// because both waiter modes consume rawBody (typed DecodeResult decodes it
+// after wakeup; raw invokes slice it) and a decoded Result would be
+// discarded. This keeps the full inner-object decode off the receive loop's
+// critical path before the waiter wakes. Bodies shorter than a header plus
+// one constructor fall through to tl.Decode and fail exactly as before.
+func decodeInboundObject(body []byte) (tl.Object, error) {
+	if len(body) >= 16 && binary.LittleEndian.Uint32(body) == tl.MTPRPCResultConstructorID {
+		return &tl.MTPRPCResult{ReqMessageID: int64(binary.LittleEndian.Uint64(body[4:12]))}, nil
+	}
+	return tl.Decode(body, tl.DefaultDecodeLimits())
 }

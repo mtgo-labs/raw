@@ -77,7 +77,6 @@ func (table *PendingTable) AddMessage(messageID uint64, message tl.MTPMessage, r
 	table.entries[messageID] = request
 	return request, nil
 }
-
 func (table *PendingTable) Resolve(messageID uint64, result PendingResult) bool {
 	if table == nil || messageID == 0 {
 		return false
@@ -97,7 +96,8 @@ func (table *PendingTable) Resolve(messageID uint64, result PendingResult) bool 
 // ResolveRPCResult encodes the validated rpc_result payload and completes its
 // matching pending request. Unknown request IDs are ignored by design.
 func (table *PendingTable) ResolveRPCResult(result *tl.MTPRPCResult, rawBody []byte) (bool, error) {
-	if result == nil || result.ReqMessageID == 0 || result.Result == nil {
+	if result == nil || result.ReqMessageID == 0 ||
+		(result.Result == nil && len(rawBody) < 4) {
 		return false, ErrPendingMessageID
 	}
 	if rpcError, ok := result.Result.(*tl.MTPRPCError); ok {
