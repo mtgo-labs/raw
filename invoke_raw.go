@@ -55,6 +55,9 @@ func InvokeWithRawResult(ctx context.Context, client *Client, request tl.Object)
 			}
 			continue
 		}
+		if !rpcError.Transient() || attempt == maxAttempts {
+			return result, err
+		}
 	}
 	return RawResult{}, ErrNotConnected
 }
@@ -163,6 +166,7 @@ selectRoute:
 	var sendMu *sync.Mutex
 	var sender *routeSender
 	var ordering *map[string]uint64
+	var initConnectionDone *bool
 	dcid := options.DCID
 	if dcid == 0 {
 		dcid = client.config.DCID
@@ -201,7 +205,7 @@ selectRoute:
 		if route.sender == nil {
 			route.sender = client.startRouteSenderLocked(selectedKey, route.session, route.connection, &route.writeMu)
 		}
-		sessionState, connection, sendMu, writeMu, sender, ordering = route.session, route.connection, &route.sendMu, &route.writeMu, route.sender, &route.ordering
+		sessionState, connection, sendMu, writeMu, sender, ordering, initConnectionDone = route.session, route.connection, &route.sendMu, &route.writeMu, route.sender, &route.ordering, &route.initConnectionDone
 	} else if options.Kind == ConnectionMain {
 		if client.conn == nil || client.session == nil {
 			client.mu.Unlock()
@@ -225,7 +229,7 @@ selectRoute:
 		if client.sender == nil {
 			client.sender = client.startRouteSenderLocked(selectedKey, client.session, client.conn, &client.writeMu)
 		}
-		sessionState, connection, sendMu, writeMu, sender, ordering = client.session, client.conn, &client.sendMu, &client.writeMu, client.sender, &client.ordering
+		sessionState, connection, sendMu, writeMu, sender, ordering, initConnectionDone = client.session, client.conn, &client.sendMu, &client.writeMu, client.sender, &client.ordering, &client.initConnectionDone
 	} else {
 		client.mu.Unlock()
 		return RawResult{}, ErrNotConnected
@@ -233,6 +237,10 @@ selectRoute:
 	client.mu.Unlock()
 	sendMu.Lock()
 	var object tl.Object = request
+	wrappedInitConnection := !*initConnectionDone
+	if wrappedInitConnection {
+		object = wrapInitConnectionObject(client.config.APIID, client.config.InitConnection, request)
+	}
 	if options.OrderingKey != "" {
 		if *ordering == nil {
 			*ordering = make(map[string]uint64)
@@ -290,8 +298,39 @@ selectRoute:
 	if waitErr != nil && pending == nil {
 		return RawResult{}, waitErr
 	}
+	if waitErr == nil {
+		sendMu.Lock()
+		if tgerr.IsConnectionNotInited(pending.Result.Err) {
+			*initConnectionDone = false
+		} else if wrappedInitConnection {
+			*initConnectionDone = true
+		}
+		sendMu.Unlock()
+	}
 	if pending.Result.Err != nil {
 		return RawResult{}, pending.Result.Err
 	}
 	return rawResult(pending.Result.Body), nil
+}
+
+// wrapInitConnectionObject wraps one erased raw request in
+// invokeWithLayer(initConnection(...)) for the first content message on a
+// route, mirroring the typed path. Telegram rejects API queries sent before
+// initConnection with CONNECTION_NOT_INITED.
+func wrapInitConnectionObject(apiID int32, init InitConnectionConfig, request tl.Object) tl.Object {
+	return &tl.InvokeWithLayerRequest[tl.Object]{
+		Layer: int32(tl.Layer),
+		Query: &tl.InitConnectionRequest[tl.Object]{
+			APIID:          apiID,
+			DeviceModel:    init.DeviceModel,
+			SystemVersion:  init.SystemVersion,
+			AppVersion:     init.AppVersion,
+			SystemLangCode: init.SystemLanguageCode,
+			LangPack:       init.LanguagePack,
+			LangCode:       init.LanguageCode,
+			Proxy:          init.Proxy,
+			Params:         init.Parameters,
+			Query:          tl.RequestObject{Object: request},
+		},
+	}
 }
