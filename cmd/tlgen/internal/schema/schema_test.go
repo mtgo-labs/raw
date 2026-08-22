@@ -14,20 +14,20 @@ func TestLoadPinnedAPI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAPI: %v", err)
 	}
-	if loaded.Layer != 228 {
-		t.Fatalf("layer = %d, want 228", loaded.Layer)
+	if loaded.Layer != 229 {
+		t.Fatalf("layer = %d, want 229", loaded.Layer)
 	}
-	if len(loaded.Entries) != 2452 {
-		t.Fatalf("entries = %d, want 2452", len(loaded.Entries))
+	if len(loaded.Entries) != 2471 {
+		t.Fatalf("entries = %d, want 2471", len(loaded.Entries))
 	}
-	if len(loaded.Classes) != 1644 {
-		t.Fatalf("classes = %d, want 1644", len(loaded.Classes))
+	if len(loaded.Classes) != 1657 {
+		t.Fatalf("classes = %d, want 1657", len(loaded.Classes))
 	}
-	if len(loaded.Methods) != 808 {
-		t.Fatalf("methods = %d, want 808", len(loaded.Methods))
+	if len(loaded.Methods) != 814 {
+		t.Fatalf("methods = %d, want 814", len(loaded.Methods))
 	}
-	if len(loaded.Unions) != 605 {
-		t.Fatalf("unions = %d, want 605", len(loaded.Unions))
+	if len(loaded.Unions) != 613 {
+		t.Fatalf("unions = %d, want 613", len(loaded.Unions))
 	}
 
 	user := loaded.Unions["User"]

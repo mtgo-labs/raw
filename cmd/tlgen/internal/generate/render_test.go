@@ -26,8 +26,8 @@ func TestRenderPinnedSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if len(outputs) != 30 {
-		t.Fatalf("outputs = %d, want 30", len(outputs))
+	if len(outputs) != 53 {
+		t.Fatalf("outputs = %d, want 53", len(outputs))
 	}
 
 	var typeCount, constCount, functionCount int
@@ -59,26 +59,30 @@ func TestRenderPinnedSchemas(t *testing.T) {
 			}
 		}
 	}
-	if typeCount != 3128 {
-		t.Fatalf("generated types = %d, want 3128", typeCount)
+	if typeCount != 3155 {
+		t.Fatalf("generated types = %d, want 3155", typeCount)
 	}
-	if constCount != 2498 {
-		t.Fatalf("generated constants = %d, want 2498", constCount)
+	if constCount != 2517 {
+		t.Fatalf("generated constants = %d, want 2517", constCount)
 	}
-	if functionCount != 19803 {
-		t.Fatalf("generated functions = %d, want 19803", functionCount)
+	if functionCount != 19957 {
+		t.Fatalf("generated functions = %d, want 19957", functionCount)
 	}
 
 	assertOutputContains(t, outputs, "tl/api.go", []string{
-		"const Layer = 228",
+		"const Layer = 229",
+		"func decodeObject(input *decoder) (Object, error)",
+	})
+	assertOutputContains(t, outputs, "tl/api_core_u.go", []string{
 		"type UserClass interface",
+	})
+	assertOutputContains(t, outputs, "tl/api_core_i.go", []string{
 		"type InvokeAfterMessageRequest[X any] struct",
 		"Query Request[X]",
 		"requestResult(X)",
 		"func (value *InvokeAfterMessageRequest[X]) encodedSize() (int, error)",
 		"func (value *InvokeAfterMessageRequest[X]) encode(output encoder) (encoder, error)",
 		"func (value *InvokeAfterMessageRequest[X]) decodeResult(state decoder) (X, decoder, error)",
-		"func decodeObject(input *decoder) (Object, error)",
 	})
 	assertOutputContains(t, outputs, "tl/api_messages.go", []string{
 		"type MessagesGetHistoryRequest struct",

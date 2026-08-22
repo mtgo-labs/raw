@@ -17,7 +17,7 @@ func TestPinnedUpstreamMetadataAndInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readUpstream: %v", err)
 	}
-	if metadata.commit != "2af1d0d5564a2a5b231c055cda53a7eb19a401eb" {
+	if metadata.commit != "db41bb8c753bf43b452a7b01c47f079ceb3dce09" {
 		t.Fatalf("commit = %q", metadata.commit)
 	}
 	api, err := schema.LoadAPI(filepath.Join(root, "schema", "api-schema.json"))

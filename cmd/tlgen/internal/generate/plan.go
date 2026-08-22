@@ -18,8 +18,13 @@ type File struct {
 	Path      string
 	Flavor    naming.Flavor
 	Namespace string
-	Entries   []*schema.Entry
-	Unions    []*schema.Union
+	// Bucket shards the API core namespace ("" namespace) by the first
+	// letter of each name so no generated file grows without bound. The
+	// empty bucket is the anchor file that carries the Layer constant and
+	// the shared object decoder.
+	Bucket  string
+	Entries []*schema.Entry
+	Unions  []*schema.Union
 }
 
 // Plan is the complete, stably ordered generated-file inventory.
@@ -30,6 +35,7 @@ type Plan struct {
 type fileKey struct {
 	flavor    naming.Flavor
 	namespace string
+	bucket    string
 }
 
 // BuildPlan validates both schemas and assigns every entry and union to one
@@ -52,6 +58,11 @@ func BuildPlan(api, mtp *schema.Schema) (*Plan, error) {
 	if err := assignSchema(files, api, naming.API); err != nil {
 		return nil, err
 	}
+	// The API core anchor file holds the Layer constant and the shared
+	// object decoder even when no entry or union lands in it.
+	if _, err := getFile(files, naming.API, "", ""); err != nil {
+		return nil, err
+	}
 	if err := assignSchema(files, mtp, naming.MTP); err != nil {
 		return nil, err
 	}
@@ -68,7 +79,10 @@ func BuildPlan(api, mtp *schema.Schema) (*Plan, error) {
 		if order := cmp.Compare(left.Flavor, right.Flavor); order != 0 {
 			return order
 		}
-		return cmp.Compare(left.Namespace, right.Namespace)
+		if order := cmp.Compare(left.Namespace, right.Namespace); order != 0 {
+			return order
+		}
+		return cmp.Compare(left.Bucket, right.Bucket)
 	})
 	for index := 1; index < len(plan.Files); index++ {
 		previous := plan.Files[index-1]
@@ -107,7 +121,11 @@ func assignSchema(
 		if err != nil {
 			return fmt.Errorf("entry %q: %w", entry.Name, err)
 		}
-		file, err := getFile(files, flavor, namespace)
+		bucket, err := bucketOf(flavor, namespace, entry.Name)
+		if err != nil {
+			return fmt.Errorf("entry %q: %w", entry.Name, err)
+		}
+		file, err := getFile(files, flavor, namespace, bucket)
 		if err != nil {
 			return err
 		}
@@ -118,7 +136,11 @@ func assignSchema(
 		if err != nil {
 			return fmt.Errorf("union %q: %w", name, err)
 		}
-		file, err := getFile(files, flavor, namespace)
+		bucket, err := bucketOf(flavor, namespace, name)
+		if err != nil {
+			return fmt.Errorf("union %q: %w", name, err)
+		}
+		file, err := getFile(files, flavor, namespace, bucket)
 		if err != nil {
 			return err
 		}
@@ -127,29 +149,46 @@ func assignSchema(
 	return nil
 }
 
+// bucketOf shards API core-namespace names by first letter so no single
+// generated file grows without bound. All other namespaces are unsharded.
+func bucketOf(flavor naming.Flavor, namespace, name string) (string, error) {
+	if flavor != naming.API || namespace != "" {
+		return "", nil
+	}
+	if name == "" {
+		return "", fmt.Errorf("empty name")
+	}
+	first := strings.ToLower(name[:1])
+	if first < "a" || first > "z" {
+		return "", fmt.Errorf("name %q does not start with a letter", name)
+	}
+	return first, nil
+}
+
 func getFile(
 	files map[fileKey]*File,
 	flavor naming.Flavor,
-	namespace string,
+	namespace, bucket string,
 ) (*File, error) {
-	key := fileKey{flavor: flavor, namespace: namespace}
+	key := fileKey{flavor: flavor, namespace: namespace, bucket: bucket}
 	if file := files[key]; file != nil {
 		return file, nil
 	}
-	path, err := outputPath(flavor, namespace)
+	p, err := outputPath(flavor, namespace, bucket)
 	if err != nil {
 		return nil, err
 	}
 	file := &File{
-		Path:      path,
+		Path:      p,
 		Flavor:    flavor,
 		Namespace: namespace,
+		Bucket:    bucket,
 	}
 	files[key] = file
 	return file, nil
 }
 
-func outputPath(flavor naming.Flavor, namespace string) (string, error) {
+func outputPath(flavor naming.Flavor, namespace, bucket string) (string, error) {
 	var stem string
 	switch flavor {
 	case naming.API:
@@ -164,6 +203,8 @@ func outputPath(flavor naming.Flavor, namespace string) (string, error) {
 	}
 	if namespace != "" {
 		stem += "_" + strings.ReplaceAll(namespace, ".", "_")
+	} else if bucket != "" {
+		stem += "_core_" + bucket
 	}
 	return path.Join("tl", stem+".go"), nil
 }

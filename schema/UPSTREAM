@@ -1,15 +1,29 @@
-# Pinned mtcute source for schemas, errors, and RSA keys.
-repository=https://github.com/mtcute/mtcute
-commit=2af1d0d5564a2a5b231c055cda53a7eb19a401eb
-version=0.31.0
-api_layer=228
-api_constructors=1644
-api_methods=808
-api_unions=605
-api_union_comments=591
-mtp_constructors=45
+# Pinned upstream sources for schemas, errors, and RSA keys.
+#
+# The API schema is normally taken from mtcute. mtcute has not published a
+# layer 229 schema yet, so api-schema.json was surgically patched from
+# tdesktop's api.tl (layer 229): constructor IDs, arguments, predicates, and
+# vector modifiers were derived from the TL text, while existing comments,
+# int53 annotations, and union comments from the mtcute pin were preserved
+# entry-by-entry. The MTProto schema, error list, and RSA keys are unchanged
+# upstream and remain pinned to mtcute.
+tdesktop_repository=https://github.com/telegramdesktop/tdesktop
+tdesktop_commit=db41bb8c753bf43b452a7b01c47f079ceb3dce09
+tdesktop_schema_source=Telegram/SourceFiles/mtproto/scheme/api.tl
+tdesktop_derivation=schema/_old228.tl + schema/_new229.tl diff applied to the mtcute 228 JSON
 
-api_schema_source=packages/core/src/tl/api-schema.json
+mtp_repository=https://github.com/mtcute/mtcute
+mtp_commit=2af1d0d5564a2a5b231c055cda53a7eb19a401eb
+mtp_version=0.31.0
 mtp_schema_source=packages/core/src/tl/mtp-schema.json
 raw_errors_source=packages/core/src/tl/raw-errors.json
 rsa_keys_source=packages/core/scripts/tl/data/rsa-keys.txt
+
+# Generated-code provenance (embedded in tl/ headers).
+commit=db41bb8c753bf43b452a7b01c47f079ceb3dce09
+api_layer=229
+api_constructors=1657
+api_methods=814
+api_unions=613
+api_union_comments=591
+mtp_constructors=45

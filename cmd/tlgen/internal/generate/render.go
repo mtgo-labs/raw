@@ -123,7 +123,9 @@ func renderFile(
 ) ([]byte, error) {
 	fset := token.NewFileSet()
 	file := &ast.File{Name: ast.NewIdent("tl")}
-	if planned.Flavor == naming.API && planned.Namespace == "" {
+	coreAnchor := planned.Flavor == naming.API &&
+		planned.Namespace == "" && planned.Bucket == ""
+	if coreAnchor {
 		file.Decls = append(file.Decls, layerDecl(metadata.Layer))
 	}
 	for _, union := range planned.Unions {
@@ -151,7 +153,7 @@ func renderFile(
 		}
 		file.Decls = append(file.Decls, declarations...)
 	}
-	if planned.Flavor == naming.API && planned.Namespace == "" {
+	if coreAnchor {
 		decoder, err := objectDecoderDecl(api, mtp, fset)
 		if err != nil {
 			return nil, err
