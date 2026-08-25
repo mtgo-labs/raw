@@ -137,7 +137,7 @@ func (client *Client) handleRouteLiveness(key routeKey, route *clientRoute, resu
 	}
 
 	client.mu.Lock()
-	writeMu, owned := client.routeWriteMutexLocked(key, route)
+	_, writeMu, owned := client.routeMutexesLocked(key, route)
 	client.mu.Unlock()
 	if !owned {
 		return false
@@ -166,15 +166,20 @@ func (client *Client) handleRouteLiveness(key routeKey, route *clientRoute, resu
 	return true
 }
 
-func (client *Client) routeWriteMutexLocked(key routeKey, route *clientRoute) (*sync.Mutex, bool) {
+func (client *Client) routeMutexesLocked(key routeKey, route *clientRoute) (*sync.Mutex, *sync.Mutex, bool) {
 	if client.closed || route == nil {
-		return nil, false
+		return nil, nil, false
 	}
 	if key == (routeKey{dcid: client.config.DCID, kind: ConnectionMain, slot: 0}) {
-		return &client.writeMu, client.session == route.session && client.conn == route.connection
+		if client.session == route.session && client.conn == route.connection {
+			return &client.sendMu, &client.writeMu, true
+		}
+		return nil, nil, false
 	}
-	current := client.routes[key]
-	return &route.writeMu, current == route
+	if current := client.routes[key]; current == route {
+		return &route.sendMu, &route.writeMu, true
+	}
+	return nil, nil, false
 }
 
 func (client *Client) stopRouteLivenessLocked(key routeKey, sessionState *mtproto.Session) {

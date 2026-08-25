@@ -858,7 +858,7 @@ func (client *Client) failLocked(err error) {
 		client.session,
 	)
 	if client.sender != nil {
-		client.sender.stopAndCancel(err)
+		client.sender.halt()
 		client.sender = nil
 	}
 	if client.session != nil {
@@ -1020,13 +1020,13 @@ func (client *Client) disconnectLocked() {
 	client.stopAllRouteLivenessLocked()
 	for key, route := range client.routes {
 		client.stopRouteIdleTimerLocked(route)
-		route.sender.stopAndCancel(ErrDisconnected)
+		route.sender.halt()
 		route.session.Close(ErrDisconnected)
 		_ = client.pool.Discard(mtproto.PoolKey{DCID: key.dcid, Kind: mtproto.ConnectionKind(key.kind), Slot: key.slot}, route.connection)
 		delete(client.routes, key)
 	}
 	if client.sender != nil {
-		client.sender.stopAndCancel(ErrDisconnected)
+		client.sender.halt()
 		client.sender = nil
 	}
 	if client.session != nil {
@@ -1086,7 +1086,7 @@ func (client *Client) closeLocked(cause error) error {
 		pendingErr = mtproto.ErrSessionClosed
 	}
 	if client.sender != nil {
-		client.sender.stopAndCancel(pendingErr)
+		client.sender.halt()
 		client.sender = nil
 	}
 	if client.session != nil {
@@ -1095,7 +1095,7 @@ func (client *Client) closeLocked(cause error) error {
 	}
 	for key, route := range client.routes {
 		client.stopRouteIdleTimerLocked(route)
-		route.sender.stopAndCancel(pendingErr)
+		route.sender.halt()
 		route.session.Close(pendingErr)
 		if err := client.pool.Discard(mtproto.PoolKey{DCID: key.dcid, Kind: mtproto.ConnectionKind(key.kind), Slot: key.slot}, route.connection); closeErr == nil {
 			closeErr = err

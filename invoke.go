@@ -238,22 +238,29 @@ selectRoute:
 	var messageID uint64
 	var pendingRequest *mtproto.PendingRequest
 	if err == nil {
-		var message tl.MTPMessage
-		message, pendingRequest, err = sessionState.Prepare(now, object)
-		messageID = uint64(message.MessageID)
-		if err == nil {
-			acks := sender.drainAcks()
+		acks := sender.drainAcks()
+		wireFailed := false
+		// Prepare allocates the message id inside writeMu: every writer on
+		// the route follows this discipline so ids reach the wire in
+		// allocation order.
+		writeMu.Lock()
+		message, prepared, prepareErr := sessionState.Prepare(now, object)
+		if prepareErr != nil {
+			err = prepareErr
+		} else {
+			messageID = uint64(message.MessageID)
+			pendingRequest = prepared
 			messages := [...]tl.MTPMessage{message}
-			writeMu.Lock()
 			_, err = sessionState.SendPrepared(
 				connection, rand.Reader, now, messages[:], acks, false,
 			)
-			writeMu.Unlock()
-			sendFailed = err != nil
 			if err != nil {
+				wireFailed = true
 				sessionState.Cancel(messageID, err)
 			}
 		}
+		writeMu.Unlock()
+		sendFailed = sendFailed || wireFailed
 	}
 	if err == nil && options.OrderingKey != "" {
 		(*ordering)[options.OrderingKey] = messageID

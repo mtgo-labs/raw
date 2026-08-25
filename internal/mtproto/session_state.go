@@ -105,8 +105,11 @@ func (state *SessionState) CorrectTime(now time.Time, sourceMessageID uint64, fo
 	offset := serverTime - now.Unix()
 	state.mu.Lock()
 	if force || offset > state.timeOffset {
+		// The monotonic floor survives time corrections: lowering it here
+		// would let the next time-derived id fall below ids the server has
+		// already accepted, drawing MSGID_DECREASE_RETRY. Only Reset, which
+		// rotates the session id, may clear the floor.
 		state.timeOffset = offset
-		state.lastMessageID = 0
 	}
 	state.mu.Unlock()
 	return nil

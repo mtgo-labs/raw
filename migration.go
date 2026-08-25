@@ -89,7 +89,7 @@ func (client *Client) changePrimaryDC(ctx context.Context, targetDC int) error {
 		delete(client.routes, targetRouteKey)
 		client.stopRouteIdleTimerLocked(route)
 		client.stopRouteLivenessLocked(targetRouteKey, route.session)
-		route.sender.stopAndCancel(mtproto.ErrSessionClosed)
+		route.sender.halt()
 		route.session.Close(mtproto.ErrSessionClosed)
 		_ = client.pool.Discard(mtproto.PoolKey{
 			DCID: targetDC, Kind: mtproto.ConnectionMain, Slot: 0,
@@ -225,7 +225,7 @@ func (client *Client) changePrimaryDC(ctx context.Context, targetDC int) error {
 		routeKey{dcid: sourceDC, kind: ConnectionMain, slot: 0},
 		oldSession,
 	)
-	oldSender.stopAndCancel(mtproto.ErrSessionClosed)
+	oldSender.halt()
 	oldSession.Close(mtproto.ErrSessionClosed)
 	_ = client.pool.Discard(mtproto.PoolKey{
 		DCID: sourceDC, Kind: mtproto.ConnectionMain, Slot: 0,

@@ -7,23 +7,24 @@ import (
 	"time"
 
 	"github.com/mtgo-labs/raw/internal/mtproto"
-	"github.com/mtgo-labs/raw/tl"
 )
 
+// routeSender flushes pending acknowledgements for one route. RPC requests
+// and recoveries are written inline by their originating paths under the
+// route write mutex; ids allocated for a queued message could reach the wire
+// below ids a direct writer sent in between, so nothing that carries a
+// pre-allocated message id may be queued here.
 type routeSender struct {
-	mu       sync.Mutex
-	writeMu  *sync.Mutex
-	session  *mtproto.Session
-	conn     net.Conn
-	now      func() time.Time
-	onError  func(error)
-	capacity int
-	requests []tl.MTPMessage
-	retries  map[int64]struct{}
-	acks     []int64
-	wake     chan struct{}
-	stop     chan struct{}
-	stopped  bool
+	mu      sync.Mutex
+	writeMu *sync.Mutex
+	session *mtproto.Session
+	conn    net.Conn
+	now     func() time.Time
+	onError func(error)
+	acks    []int64
+	wake    chan struct{}
+	stop    chan struct{}
+	stopped bool
 }
 
 func newRouteSender(
@@ -38,67 +39,15 @@ func newRouteSender(
 		capacity = 1
 	}
 	return &routeSender{
-		writeMu:  writeMu,
-		session:  sessionState,
-		conn:     connection,
-		now:      now,
-		onError:  onError,
-		capacity: capacity,
-		requests: make([]tl.MTPMessage, 0, capacity),
-		acks:     make([]int64, 0, min(capacity, mtproto.MaxAcknowledgementIDs)),
-		wake:     make(chan struct{}, 1),
-		stop:     make(chan struct{}),
+		writeMu: writeMu,
+		session: sessionState,
+		conn:    connection,
+		now:     now,
+		onError: onError,
+		acks:    make([]int64, 0, min(capacity, mtproto.MaxAcknowledgementIDs)),
+		wake:    make(chan struct{}, 1),
+		stop:    make(chan struct{}),
 	}
-}
-
-func (sender *routeSender) enqueueRequest(message tl.MTPMessage) error {
-	return sender.enqueue(message, false)
-}
-
-func (sender *routeSender) enqueueRetry(message tl.MTPMessage) error {
-	return sender.enqueue(message, true)
-}
-
-func (sender *routeSender) enqueue(message tl.MTPMessage, retry bool) error {
-	if sender == nil {
-		return mtproto.ErrSessionClosed
-	}
-	sender.mu.Lock()
-	defer sender.mu.Unlock()
-	if sender.stopped {
-		return mtproto.ErrSessionClosed
-	}
-	if len(sender.requests) >= sender.capacity {
-		return mtproto.ErrPendingLimit
-	}
-	sender.requests = append(sender.requests, message)
-	if retry {
-		if sender.retries == nil {
-			sender.retries = make(map[int64]struct{})
-		}
-		sender.retries[message.MessageID] = struct{}{}
-	}
-	sender.signalLocked()
-	return nil
-}
-
-func (sender *routeSender) replaceRequests(messages []tl.MTPMessage) error {
-	if sender == nil {
-		return mtproto.ErrSessionClosed
-	}
-	sender.mu.Lock()
-	defer sender.mu.Unlock()
-	if sender.stopped {
-		return mtproto.ErrSessionClosed
-	}
-	if len(messages) > sender.capacity {
-		return mtproto.ErrPendingLimit
-	}
-	sender.requests = append(sender.requests[:0], messages...)
-	sender.retries = nil
-	sender.acks = nil
-	sender.signalLocked()
-	return nil
 }
 
 func (sender *routeSender) enqueueAcknowledgements(messageIDs []int64) error {
@@ -147,61 +96,26 @@ func (sender *routeSender) signalLocked() {
 	}
 }
 
-func (sender *routeSender) takeBatch() ([]tl.MTPMessage, []int64, bool) {
+func (sender *routeSender) takeAcks() []int64 {
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
 	if sender.stopped {
-		return nil, nil, false
+		return nil
 	}
-	acknowledgements := sender.acks
+	acks := sender.acks
 	sender.acks = nil
-	messageLimit := mtproto.MaxContainerMessages
-	packetSize := 0
-	if len(acknowledgements) != 0 {
-		messageLimit--
-		packetSize = 28 + len(acknowledgements)*8
-	}
-	count := 0
-	for count < len(sender.requests) && count < messageLimit {
-		messageSize := 16 + int(sender.requests[count].Bytes)
-		if count != 0 && packetSize+messageSize > mtproto.MaxContainerPayload {
-			break
-		}
-		packetSize += messageSize
-		count++
-	}
-	var messages []tl.MTPMessage
-	forceContainer := false
-	if count != 0 {
-		messages = sender.requests[:count]
-		for _, message := range messages {
-			if _, retry := sender.retries[message.MessageID]; retry {
-				forceContainer = true
-				delete(sender.retries, message.MessageID)
-			}
-		}
-		if count == len(sender.requests) {
-			sender.requests = nil
-		} else {
-			sender.requests = sender.requests[count:]
-			sender.signalLocked()
-		}
-	}
-	return messages, acknowledgements, forceContainer
+	return acks
 }
-func (sender *routeSender) recycleBatch(messages []tl.MTPMessage, acknowledgements []int64) {
-	clear(messages)
-	clear(acknowledgements)
+
+func (sender *routeSender) recycleAcks(acks []int64) {
+	clear(acks)
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
 	if sender.stopped {
 		return
 	}
-	if len(sender.requests) == 0 {
-		sender.requests = messages[:0]
-	}
 	if len(sender.acks) == 0 {
-		sender.acks = acknowledgements[:0]
+		sender.acks = acks[:0]
 	}
 }
 
@@ -210,8 +124,8 @@ func (sender *routeSender) run() {
 		select {
 		case <-sender.wake:
 			for {
-				messages, acknowledgements, forceContainer := sender.takeBatch()
-				if len(messages) == 0 && len(acknowledgements) == 0 {
+				acks := sender.takeAcks()
+				if len(acks) == 0 {
 					break
 				}
 				sender.writeMu.Lock()
@@ -219,12 +133,12 @@ func (sender *routeSender) run() {
 					sender.conn,
 					rand.Reader,
 					sender.now(),
-					messages,
-					acknowledgements,
-					forceContainer,
+					nil,
+					acks,
+					false,
 				)
 				sender.writeMu.Unlock()
-				sender.recycleBatch(messages, acknowledgements)
+				sender.recycleAcks(acks)
 				if err != nil {
 					sender.halt()
 					if sender.onError != nil {
@@ -239,28 +153,16 @@ func (sender *routeSender) run() {
 	}
 }
 
-func (sender *routeSender) halt() []tl.MTPMessage {
+func (sender *routeSender) halt() {
 	if sender == nil {
-		return nil
+		return
 	}
 	sender.mu.Lock()
+	defer sender.mu.Unlock()
 	if sender.stopped {
-		sender.mu.Unlock()
-		return nil
+		return
 	}
 	sender.stopped = true
-	requests := sender.requests
-	sender.requests = nil
-	sender.retries = nil
 	sender.acks = nil
 	close(sender.stop)
-	sender.mu.Unlock()
-	return requests
-}
-
-func (sender *routeSender) stopAndCancel(err error) {
-	requests := sender.halt()
-	for _, message := range requests {
-		sender.session.Cancel(uint64(message.MessageID), err)
-	}
 }

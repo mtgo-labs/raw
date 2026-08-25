@@ -514,7 +514,7 @@ func TestClientReconnectsPendingRequestTranscript(t *testing.T) {
 
 	client.mu.Lock()
 	sessionState := client.session
-	sessionID := sessionState.SessionID()
+	originalSessionID := sessionState.SessionID()
 	client.initConnectionDone = true
 	client.mu.Unlock()
 
@@ -528,7 +528,7 @@ func TestClientReconnectsPendingRequestTranscript(t *testing.T) {
 		completed <- nearestResult{value: value, err: invokeErr}
 	}()
 
-	firstMessageID, firstBody, err := readClientRequest(firstServer, authKey, sessionID)
+	firstMessageID, firstBody, err := readClientRequest(firstServer, authKey, originalSessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,35 +552,36 @@ func TestClientReconnectsPendingRequestTranscript(t *testing.T) {
 		t.Fatalf("second transport header=%x", transportHeader)
 	}
 	defer secondServer.Close()
-	containerID, retryBody, err := readClientRequest(secondServer, authKey, sessionID)
+	// The reconnect must rotate the session id and re-send the pending
+	// request with a fresh msg id above the pre-drop high-water mark;
+	// re-using the original id would draw MSGID_DECREASE_RETRY.
+	var rotatedSessionID [8]byte
+	for deadline := time.Now(); ; {
+		client.mu.Lock()
+		rotatedSessionID = sessionState.SessionID()
+		client.mu.Unlock()
+		if rotatedSessionID != originalSessionID {
+			break
+		}
+		if time.Since(deadline) > 5*time.Second {
+			t.Fatal("reconnect did not rotate the session ID")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	retryMessageID, retryBody, err := readClientRequest(secondServer, authKey, rotatedSessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(retryBody) < 28 ||
-		binary.LittleEndian.Uint32(retryBody) != tl.MTPMessageContainerConstructorID ||
-		binary.LittleEndian.Uint32(retryBody[4:]) != 1 {
-		t.Fatalf("retry container=%x", retryBody)
+	if len(retryBody) < 4 || binary.LittleEndian.Uint32(retryBody) != tl.HelpGetNearestDCRequestConstructorID {
+		t.Fatalf("retry request=%x", retryBody)
 	}
-	retryMessageID := binary.LittleEndian.Uint64(retryBody[8:])
-	retrySize := int(binary.LittleEndian.Uint32(retryBody[20:]))
-	if containerID <= retryMessageID ||
-		retryMessageID != firstMessageID ||
-		retrySize != len(retryBody)-24 ||
-		retrySize < 4 ||
-		binary.LittleEndian.Uint32(retryBody[24:]) != tl.HelpGetNearestDCRequestConstructorID {
-		t.Fatalf(
-			"container=%x retry=%x first=%x size=%d body=%x",
-			containerID,
-			retryMessageID,
-			firstMessageID,
-			retrySize,
-			retryBody,
-		)
+	if retryMessageID <= firstMessageID {
+		t.Fatalf("retry msg ID=%x must exceed pre-drop msg ID=%x", retryMessageID, firstMessageID)
 	}
 	if err := writeServerResult(
 		secondServer,
 		authKey,
-		sessionID,
+		rotatedSessionID,
 		retryMessageID,
 		&tl.NearestDC{Country: "IQ", ThisDC: 2, NearestDC: 4},
 	); err != nil {

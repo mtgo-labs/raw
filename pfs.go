@@ -246,7 +246,7 @@ func (client *Client) invalidatePFSRoute(key routeKey, route *clientRoute) bool 
 	}
 	client.mu.Unlock()
 	binding.clearTemporary()
-	route.sender.stopAndCancel(ErrPFSRebindRequired)
+	route.sender.halt()
 	route.session.Close(ErrPFSRebindRequired)
 	_ = client.pool.Discard(mtproto.PoolKey{
 		DCID: key.dcid, Kind: mtproto.ConnectionKind(key.kind), Slot: key.slot,
@@ -293,7 +293,7 @@ func (client *Client) disconnectPFSRoute(options InvokeOptions) {
 	if route == nil {
 		return
 	}
-	route.sender.stopAndCancel(ErrPFSRebindRequired)
+	route.sender.halt()
 	route.session.Close(ErrPFSRebindRequired)
 	_ = client.pool.Discard(mtproto.PoolKey{
 		DCID: key.dcid, Kind: mtproto.ConnectionKind(key.kind), Slot: key.slot,

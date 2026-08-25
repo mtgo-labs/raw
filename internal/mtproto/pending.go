@@ -38,6 +38,9 @@ type PendingRequest struct {
 	message       tl.MTPMessage
 	containerID   uint64
 	acknowledged  bool
+	// msgIDDecreaseRetried guards the MSGID_DECREASE_RETRY recovery so one
+	// request cannot ping-pong forever.
+	msgIDDecreaseRetried bool
 }
 
 // PendingTable is a bounded-scope concurrent ID table. It owns request state,
@@ -287,6 +290,47 @@ func (table *PendingTable) IsRaw(messageID uint64) bool {
 	defer table.mu.Unlock()
 	request, exists := table.entries[messageID]
 	return exists && request.Raw
+}
+
+// decodeRPCError extracts the rpc_error carried by one rpc_result, accepting
+// both a decoded inner object and the raw body left undecoded by the receive
+// fast path.
+func decodeRPCError(result *tl.MTPRPCResult, rawBody []byte) *tl.MTPRPCError {
+	if value, ok := result.Result.(*tl.MTPRPCError); ok {
+		return value
+	}
+	if len(rawBody) < 4 || binary.LittleEndian.Uint32(rawBody) != tl.MTPRPCErrorConstructorID {
+		return nil
+	}
+	object, err := tl.Decode(rawBody, tl.DefaultDecodeLimits())
+	if err != nil {
+		return nil
+	}
+	value, _ := object.(*tl.MTPRPCError)
+	return value
+}
+
+// decreaseRetryTargets selects unresolved requests rejected with
+// MSGID_DECREASE_RETRY for one retransmission with a fresh message id. A
+// request that was already recovered this way is left to resolve through the
+// normal error path.
+func (table *PendingTable) decreaseRetryTargets(reqMessageID uint64) []RecoveryTarget {
+	if table == nil || reqMessageID == 0 {
+		return nil
+	}
+	table.mu.Lock()
+	defer table.mu.Unlock()
+	targets := make([]RecoveryTarget, 0, 1)
+	for _, request := range table.entries {
+		if request.Done || request.message.Body == nil || request.msgIDDecreaseRetried {
+			continue
+		}
+		if request.wireMessageID == reqMessageID || request.containerID == reqMessageID {
+			request.msgIDDecreaseRetried = true
+			targets = append(targets, RecoveryTarget{request: request})
+		}
+	}
+	return targets
 }
 
 // RecoveryMessages snapshots unresolved outbound messages in message-ID order.

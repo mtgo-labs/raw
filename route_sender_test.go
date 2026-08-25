@@ -2,6 +2,7 @@ package raw
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"net"
 	"sync"
@@ -12,35 +13,17 @@ import (
 	"github.com/mtgo-labs/raw/tl"
 )
 
-func TestRouteSenderBatchesRequestsAndAcknowledgements(t *testing.T) {
+func TestRouteSenderBatchesAcknowledgements(t *testing.T) {
 	sender := newRouteSender(nil, nil, nil, time.Now, 2, nil)
-	first := tl.MTPMessage{MessageID: 1, Seqno: 1, Bytes: 4, Body: &tl.HelpGetConfigRequest{}}
-	second := tl.MTPMessage{MessageID: 2, Seqno: 3, Bytes: 4, Body: &tl.HelpGetConfigRequest{}}
-	if err := sender.enqueueRequest(first); err != nil {
-		t.Fatal(err)
-	}
-	if err := sender.enqueueRequest(second); err != nil {
-		t.Fatal(err)
-	}
-	if err := sender.enqueueRequest(tl.MTPMessage{}); !errors.Is(err, mtproto.ErrPendingLimit) {
-		t.Fatalf("queue overflow error=%v", err)
-	}
 	if err := sender.enqueueAcknowledgements([]int64{7, 9}); err != nil {
 		t.Fatal(err)
 	}
-	messages, acknowledgements, forceContainer := sender.takeBatch()
-	if len(messages) != 2 || messages[0].MessageID != 1 || messages[1].MessageID != 2 {
-		t.Fatalf("messages=%+v", messages)
+	acks := sender.takeAcks()
+	if len(acks) != 2 || acks[0] != 7 || acks[1] != 9 {
+		t.Fatalf("acknowledgements=%v", acks)
 	}
-	if len(acknowledgements) != 2 || acknowledgements[0] != 7 || acknowledgements[1] != 9 {
-		t.Fatalf("acknowledgements=%v", acknowledgements)
-	}
-	if forceContainer {
-		t.Fatal("new requests unexpectedly forced a container")
-	}
-	messages, acknowledgements, forceContainer = sender.takeBatch()
-	if len(messages) != 0 || len(acknowledgements) != 0 || forceContainer {
-		t.Fatalf("second batch messages=%v acknowledgements=%v force=%t", messages, acknowledgements, forceContainer)
+	if second := sender.takeAcks(); len(second) != 0 {
+		t.Fatalf("second batch acknowledgements=%v", second)
 	}
 }
 
@@ -54,42 +37,19 @@ func TestRouteSenderRejectsInvalidAcknowledgements(t *testing.T) {
 	}
 }
 
-func TestRouteSenderStopCancelsQueuedRequests(t *testing.T) {
-	sessionState := mtproto.NewSession(testAuthKey(2), 0, [8]byte{2}, 1)
-	message, pending, err := sessionState.Prepare(time.Unix(1_700_000_000, 0), &tl.HelpGetConfigRequest{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sender := newRouteSender(new(sync.Mutex), sessionState, nil, time.Now, 1, nil)
-	if err := sender.enqueueRequest(message); err != nil {
-		t.Fatal(err)
-	}
-	stopError := errors.New("sender stopped")
-	sender.stopAndCancel(stopError)
-	completed, err := sessionState.WaitPrepared(context.Background(), pending)
-	if err != nil || !errors.Is(completed.Result.Err, stopError) {
-		t.Fatalf("completed=%+v err=%v", completed, err)
-	}
-	if err := sender.enqueueRequest(message); !errors.Is(err, mtproto.ErrSessionClosed) {
-		t.Fatalf("enqueue after stop error=%v", err)
-	}
-}
-
-func TestRouteSenderRecycleDoesNotOverwriteQueuedRequests(t *testing.T) {
+func TestRouteSenderRecycleDoesNotOverwriteQueuedAcks(t *testing.T) {
 	sender := newRouteSender(nil, nil, nil, time.Now, 1, nil)
-	first := tl.MTPMessage{MessageID: 1, Bytes: 20, Body: &tl.MTPReqPQMulti{}}
-	second := tl.MTPMessage{MessageID: 2, Bytes: 20, Body: &tl.MTPReqPQMulti{}}
-	if err := sender.enqueueRequest(first); err != nil {
+	if err := sender.enqueueAcknowledgements([]int64{1}); err != nil {
 		t.Fatal(err)
 	}
-	sent, acknowledgements, _ := sender.takeBatch()
-	if err := sender.enqueueRequest(second); err != nil {
+	sent := sender.takeAcks()
+	if err := sender.enqueueAcknowledgements([]int64{2}); err != nil {
 		t.Fatal(err)
 	}
-	sender.recycleBatch(sent, acknowledgements)
-	queued, _, _ := sender.takeBatch()
-	if len(queued) != 1 || queued[0].MessageID != second.MessageID || queued[0].Body == nil {
-		t.Fatalf("queued=%+v", queued)
+	sender.recycleAcks(sent)
+	queued := sender.takeAcks()
+	if len(queued) != 1 || queued[0] != 2 {
+		t.Fatalf("queued=%v", queued)
 	}
 }
 
@@ -120,20 +80,6 @@ func TestRouteSenderEncryptedBatchTranscript(t *testing.T) {
 		}
 	}()
 
-	first, _, err := sessionState.Prepare(now, &tl.MTPReqPQMulti{Nonce: [16]byte{1}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, _, err := sessionState.Prepare(now, &tl.MTPReqPQMulti{Nonce: [16]byte{2}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sender.enqueueRequest(first); err != nil {
-		t.Fatal(err)
-	}
-	if err := sender.enqueueRequest(second); err != nil {
-		t.Fatal(err)
-	}
 	if err := sender.enqueueAcknowledgements([]int64{7, 9}); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +88,7 @@ func TestRouteSenderEncryptedBatchTranscript(t *testing.T) {
 		close(senderDone)
 	}()
 
-	containerID, body, err := readClientRequest(serverConnection, authKey, sessionID)
+	ackMessageID, body, err := readClientRequest(serverConnection, authKey, sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,20 +96,14 @@ func TestRouteSenderEncryptedBatchTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	container, ok := object.(*tl.MTPMessageContainer)
-	if !ok || len(container.Messages) != 3 {
-		t.Fatalf("wire object=%T value=%+v", object, object)
-	}
-	if containerID <= uint64(second.MessageID) ||
-		container.Messages[0].MessageID != first.MessageID ||
-		container.Messages[1].MessageID != second.MessageID {
-		t.Fatalf("container=%x messages=%+v", containerID, container.Messages)
-	}
-	acknowledgement, ok := container.Messages[2].Body.(*tl.MTPMessagesAck)
+	acknowledgement, ok := object.(*tl.MTPMessagesAck)
 	if !ok || len(acknowledgement.MessageIDs) != 2 ||
 		acknowledgement.MessageIDs[0] != 7 ||
 		acknowledgement.MessageIDs[1] != 9 {
-		t.Fatalf("acknowledgement=%T %+v", container.Messages[2].Body, container.Messages[2].Body)
+		t.Fatalf("acknowledgement=%T %+v", object, object)
+	}
+	if ackMessageID == 0 || ackMessageID&3 != 0 {
+		t.Fatalf("ack message ID=%x", ackMessageID)
 	}
 }
 
@@ -207,22 +147,41 @@ func TestRouteSenderBadSaltRecoveryTranscript(t *testing.T) {
 			t.Error("route sender did not stop")
 		}
 	}()
+	client.mu.Lock()
+	client.session = sessionState
+	client.conn = clientConnection
+	client.mu.Unlock()
 
 	message, pending, err := sessionState.Prepare(now, &tl.MTPReqPQMulti{Nonce: [16]byte{3}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := route.sender.enqueueRequest(message); err != nil {
-		t.Fatal(err)
+	// net.Pipe writes block until read, so the direct write and the server
+	// side read must overlap.
+	type wireRequest struct {
+		messageID uint64
+		body      []byte
+		err       error
 	}
-	messageID, body, err := readClientRequest(serverConnection, authKey, sessionID)
+	firstRead := make(chan wireRequest, 1)
+	go func() {
+		messageID, body, err := readClientRequest(serverConnection, authKey, sessionID)
+		firstRead <- wireRequest{messageID: messageID, body: body, err: err}
+	}()
+	client.writeMu.Lock()
+	_, err = sessionState.SendPrepared(clientConnection, rand.Reader, now, []tl.MTPMessage{message}, nil, false)
+	client.writeMu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if messageID != uint64(message.MessageID) {
-		t.Fatalf("wire message ID=%x prepared=%x", messageID, message.MessageID)
+	first := <-firstRead
+	if first.err != nil {
+		t.Fatal(first.err)
 	}
-	if object, err := tl.Decode(body, tl.DefaultDecodeLimits()); err != nil {
+	if first.messageID != uint64(message.MessageID) {
+		t.Fatalf("wire message ID=%x prepared=%x", first.messageID, message.MessageID)
+	}
+	if object, err := tl.Decode(first.body, tl.DefaultDecodeLimits()); err != nil {
 		t.Fatal(err)
 	} else if request, ok := object.(*tl.MTPReqPQMulti); !ok || request.Nonce[0] != 3 {
 		t.Fatalf("request object=%T value=%+v", object, object)
@@ -235,9 +194,9 @@ func TestRouteSenderBadSaltRecoveryTranscript(t *testing.T) {
 			authKey,
 			0,
 			sessionID,
-			messageID+1,
+			first.messageID+1,
 			&tl.MTPBadServerSalt{
-				BadMessageID:    int64(messageID),
+				BadMessageID:    int64(first.messageID),
 				BadMessageSeqno: message.Seqno,
 				ErrorCode:       48,
 				NewServerSalt:   9,
@@ -251,28 +210,36 @@ func TestRouteSenderBadSaltRecoveryTranscript(t *testing.T) {
 	if err := <-serverWrite; err != nil {
 		t.Fatal(err)
 	}
-	if err := client.applyInboundRecovery(
-		routeKey{dcid: client.config.DCID, kind: ConnectionMain},
-		route,
-		inbound,
-	); err != nil {
+	retryRead := make(chan wireRequest, 1)
+	go func() {
+		messageID, body, err := readClientRequest(serverConnection, authKey, sessionID)
+		retryRead <- wireRequest{messageID: messageID, body: body, err: err}
+	}()
+	recoveryDone := make(chan error, 1)
+	go func() {
+		recoveryDone <- client.applyInboundRecovery(
+			routeKey{dcid: client.config.DCID, kind: ConnectionMain},
+			route,
+			inbound,
+		)
+	}()
+	retry := <-retryRead
+	if err := <-recoveryDone; err != nil {
 		t.Fatal(err)
 	}
-
-	retryMessageID, retryBody, err := readClientRequest(serverConnection, authKey, sessionID)
-	if err != nil {
-		t.Fatal(err)
+	if retry.err != nil {
+		t.Fatal(retry.err)
 	}
-	if retryMessageID == messageID || sessionState.Salt() != 9 {
-		t.Fatalf("retry=%x original=%x salt=%d", retryMessageID, messageID, sessionState.Salt())
+	if retry.messageID <= first.messageID || sessionState.Salt() != 9 {
+		t.Fatalf("retry=%x original=%x salt=%d", retry.messageID, first.messageID, sessionState.Salt())
 	}
-	if object, err := tl.Decode(retryBody, tl.DefaultDecodeLimits()); err != nil {
+	if object, err := tl.Decode(retry.body, tl.DefaultDecodeLimits()); err != nil {
 		t.Fatal(err)
 	} else if request, ok := object.(*tl.MTPReqPQMulti); !ok || request.Nonce[0] != 3 {
 		t.Fatalf("retry object=%T value=%+v", object, object)
 	}
 
-	responseMessageID := retryMessageID + 1
+	responseMessageID := retry.messageID + 1
 	go func() {
 		serverWrite <- writeServerObject(
 			serverConnection,
@@ -281,7 +248,7 @@ func TestRouteSenderBadSaltRecoveryTranscript(t *testing.T) {
 			sessionID,
 			responseMessageID,
 			&tl.MTPRPCResult{
-				ReqMessageID: int64(retryMessageID),
+				ReqMessageID: int64(retry.messageID),
 				Result:       &tl.MTPReqPQMulti{Nonce: [16]byte{4}},
 			},
 		)
@@ -329,5 +296,95 @@ func TestRouteSenderBadSaltRecoveryTranscript(t *testing.T) {
 	result, ok := resultObject.(*tl.MTPReqPQMulti)
 	if !ok || result.Nonce[0] != 4 {
 		t.Fatalf("result=%T %+v", resultObject, resultObject)
+	}
+}
+
+// TestConcurrentWritersKeepWireIDsMonotonic pins the route write discipline:
+// every writer must allocate its message id while holding writeMu. Concurrent
+// invoke-style senders racing the liveness ping writer then still emit ids in
+// strictly increasing wire order; a decrease would be rejected by the server
+// as MSGID_DECREASE_RETRY.
+func TestConcurrentWritersKeepWireIDsMonotonic(t *testing.T) {
+	authKey := testAuthKey(2)
+	sessionID := [8]byte{5}
+	sessionState := mtproto.NewSession(authKey, 0, sessionID, 256)
+	clientConnection, serverConnection := net.Pipe()
+
+	type wireFrame struct {
+		messageID uint64
+		err       error
+	}
+	frames := make(chan wireFrame, 1024)
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			messageID, _, err := readClientRequest(serverConnection, authKey, sessionID)
+			if err != nil {
+				return
+			}
+			frames <- wireFrame{messageID: messageID}
+		}
+	}()
+
+	var writeMu sync.Mutex
+	var invokeWG sync.WaitGroup
+	stop := make(chan struct{})
+	var pingWG sync.WaitGroup
+	pingWG.Add(1)
+	go func() {
+		defer pingWG.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			writeMu.Lock()
+			_, err := sessionState.SendPing(clientConnection, rand.Reader, time.Now(), 1, 60)
+			writeMu.Unlock()
+			if err != nil {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	for range 8 {
+		invokeWG.Add(1)
+		go func() {
+			defer invokeWG.Done()
+			for range 20 {
+				writeMu.Lock()
+				message, _, err := sessionState.Prepare(time.Now(), &tl.MTPReqPQMulti{})
+				if err == nil {
+					_, err = sessionState.SendPrepared(
+						clientConnection, rand.Reader, time.Now(), []tl.MTPMessage{message}, nil, false,
+					)
+				}
+				writeMu.Unlock()
+				if err != nil {
+					return
+				}
+			}
+		}()
+	}
+	invokeWG.Wait()
+	close(stop)
+	pingWG.Wait()
+	_ = clientConnection.Close()
+	<-readerDone
+	close(frames)
+
+	previous := uint64(0)
+	count := 0
+	for frame := range frames {
+		if frame.messageID <= previous {
+			t.Fatalf("wire msg IDs not monotonic: previous=%x current=%x", previous, frame.messageID)
+		}
+		previous = frame.messageID
+		count++
+	}
+	if count < 160 {
+		t.Fatalf("captured frames=%d, expected at least the 160 invoke messages", count)
 	}
 }

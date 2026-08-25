@@ -27,10 +27,14 @@ func TestBadServerSaltReassignsPendingRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.Salt() != 9 || len(result.RetryMessages) != 1 {
-		t.Fatalf("salt=%d retries=%+v", session.Salt(), result.RetryMessages)
+	if session.Salt() != 9 || len(result.RecoveryTargets) != 1 {
+		t.Fatalf("salt=%d targets=%+v", session.Salt(), result.RecoveryTargets)
 	}
-	retry := result.RetryMessages[0]
+	retries := session.RecoverTargets(now, result.RecoveryTargets)
+	if len(retries) != 1 {
+		t.Fatalf("retries=%+v", retries)
+	}
+	retry := retries[0]
 	if retry.MessageID == message.MessageID || retry.Seqno&1 == 0 || session.Pending() != 1 {
 		t.Fatalf("original=%+v retry=%+v pending=%d", message, retry, session.Pending())
 	}
@@ -64,8 +68,9 @@ func TestBadMessageCorrectsTimeAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.RetryMessages) != 1 || uint64(result.RetryMessages[0].MessageID)>>32 != uint64(serverTime) {
-		t.Fatalf("retries=%+v server time=%d", result.RetryMessages, serverTime)
+	retries := session.RecoverTargets(now, result.RecoveryTargets)
+	if len(retries) != 1 || uint64(retries[0].MessageID)>>32 != uint64(serverTime) {
+		t.Fatalf("retries=%+v server time=%d", retries, serverTime)
 	}
 }
 
@@ -84,7 +89,7 @@ func TestBadMessageHighResetsAndRecoversSession(t *testing.T) {
 		serverMessageID(serverTime, 1),
 		now, nil,
 	)
-	if err != nil || !result.ResetSession || len(result.RetryMessages) != 0 {
+	if err != nil || !result.ResetSession || len(result.RecoveryTargets) != 0 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	newSessionID := [8]byte{9}
@@ -116,11 +121,11 @@ func TestNewSessionCreatedRecoversForgottenContainer(t *testing.T) {
 		ServerSalt:     9,
 	}
 	result, err := routeInboundObjectAt(session.state, session.pending, created, serverMessageID(now.Unix(), 1), now, nil)
-	if err != nil || len(result.RetryMessages) != 2 || session.Salt() != 9 {
+	if err != nil || len(result.RecoveryTargets) != 2 || session.Salt() != 9 {
 		t.Fatalf("result=%+v salt=%d err=%v", result, session.Salt(), err)
 	}
 	duplicate, err := routeInboundObjectAt(session.state, session.pending, created, serverMessageID(now.Unix(), 3), now, nil)
-	if err != nil || len(duplicate.RetryMessages) != 0 {
+	if err != nil || len(duplicate.RecoveryTargets) != 0 {
 		t.Fatalf("duplicate=%+v err=%v", duplicate, err)
 	}
 }
@@ -181,7 +186,7 @@ func TestMessagesAllInfoRetriesMissingAndGeneratedResponses(t *testing.T) {
 		MessageIDs: []int64{first.MessageID, second.MessageID},
 		Info:       []byte{1, 68},
 	}, serverMessageID(now.Unix(), 1), now, nil)
-	if err != nil || len(result.RetryMessages) != 2 {
+	if err != nil || len(result.RecoveryTargets) != 2 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
@@ -210,4 +215,68 @@ func recoveryTestAuthKey(t *testing.T) AuthKey {
 		t.Fatal(err)
 	}
 	return authKey
+}
+
+func encodeRPCErrorBody(t *testing.T, code int32, message string) []byte {
+	t.Helper()
+	body, err := tl.Encode(&tl.MTPRPCError{ErrorCode: code, ErrorMessage: message})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestMsgIDDecreaseRetryRecoversWithFreshID(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	session := NewSession(recoveryTestAuthKey(t), 1, [8]byte{1}, 2)
+	message, request, err := session.Prepare(now, &tl.MTPReqPQMulti{Nonce: [16]byte{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The receive fast path decodes only the req_msg_id and leaves the inner
+	// rpc_error in rawBody, so exercise that shape first.
+	result, err := routeInboundObjectAt(
+		session.state,
+		session.pending,
+		&tl.MTPRPCResult{ReqMessageID: message.MessageID},
+		serverMessageID(now.Unix(), 1),
+		now,
+		encodeRPCErrorBody(t, 500, "MSGID_DECREASE_RETRY"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Resolved != 0 || len(result.RecoveryTargets) != 1 {
+		t.Fatalf("result resolved=%d targets=%d", result.Resolved, len(result.RecoveryTargets))
+	}
+	retries := session.RecoverTargets(now, result.RecoveryTargets)
+	if len(retries) != 1 || retries[0].MessageID == message.MessageID {
+		t.Fatalf("retries=%+v original=%+v", retries, message)
+	}
+	if request.wireMessageID != uint64(retries[0].MessageID) {
+		t.Fatalf("request wire=%x retry=%x", request.wireMessageID, retries[0].MessageID)
+	}
+	// A second rejection for the re-sent id must resolve the request with
+	// the error instead of looping the recovery.
+	second, err := routeInboundObjectAt(
+		session.state,
+		session.pending,
+		&tl.MTPRPCResult{
+			ReqMessageID: retries[0].MessageID,
+			Result:       &tl.MTPRPCError{ErrorCode: 500, ErrorMessage: "MSGID_DECREASE_RETRY"},
+		},
+		serverMessageID(now.Unix(), 2),
+		now,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Resolved != 1 || len(second.RecoveryTargets) != 0 {
+		t.Fatalf("second resolved=%d targets=%d", second.Resolved, len(second.RecoveryTargets))
+	}
+	completed, err := session.WaitPrepared(context.Background(), request)
+	if err != nil || completed.Result.Err == nil || completed.Result.Err.Error() != "rpc error 500: MSGID_DECREASE_RETRY" {
+		t.Fatalf("completed=%+v err=%v", completed, err)
+	}
 }

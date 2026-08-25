@@ -8,35 +8,23 @@ import (
 	"github.com/mtgo-labs/raw/tl"
 )
 
-func BenchmarkRouteSenderBatch32(b *testing.B) {
+func BenchmarkRouteSenderAckBatch32(b *testing.B) {
 	sender := newRouteSender(nil, nil, nil, time.Now, 32, nil)
-	var messages [32]tl.MTPMessage
 	var acknowledgements [32]int64
-	for index := range messages {
-		messages[index] = tl.MTPMessage{
-			MessageID: int64(index + 1),
-			Seqno:     int32(index*2 + 1),
-			Bytes:     20,
-			Body:      &tl.MTPReqPQMulti{},
-		}
+	for index := range acknowledgements {
 		acknowledgements[index] = int64(index + 1)
 	}
 
 	b.ReportAllocs()
 	for b.Loop() {
-		for _, message := range messages {
-			if err := sender.enqueueRequest(message); err != nil {
-				b.Fatal(err)
-			}
-		}
 		if err := sender.enqueueAcknowledgements(acknowledgements[:]); err != nil {
 			b.Fatal(err)
 		}
-		requests, acks, forceContainer := sender.takeBatch()
-		if len(requests) != len(messages) || len(acks) != len(acknowledgements) || forceContainer {
-			b.Fatalf("requests=%d acknowledgements=%d force=%t", len(requests), len(acks), forceContainer)
+		acks := sender.takeAcks()
+		if len(acks) != len(acknowledgements) {
+			b.Fatalf("acknowledgements=%d", len(acks))
 		}
-		sender.recycleBatch(requests, acks)
+		sender.recycleAcks(acks)
 	}
 }
 

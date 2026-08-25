@@ -59,3 +59,19 @@ func TestSessionStateMessageIDUsesOffsetAndStaysMonotonic(t *testing.T) {
 		t.Fatalf("message IDs=%d,%d,%d sequence=%d", first, second, third, sequenceNo)
 	}
 }
+
+func TestCorrectTimeKeepsMonotonicFloor(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	state := NewSessionState(1, [8]byte{1}, 0)
+	first, _, _, _ := state.NextMessage(now, true)
+	// A forced downward correction (bad message 17) reports the client clock
+	// ahead of the server; the next allocated id must still exceed every id
+	// already sent, so the server never sees a decrease on the same session.
+	if err := state.CorrectTime(now, serverMessageID(now.Unix()-20, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	second, _, _, _ := state.NextMessage(now, true)
+	if second <= first {
+		t.Fatalf("ids must stay monotonic across forced correction: first=%x second=%x", first, second)
+	}
+}

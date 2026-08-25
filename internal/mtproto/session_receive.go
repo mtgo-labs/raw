@@ -6,21 +6,22 @@ import (
 	"time"
 
 	"github.com/mtgo-labs/raw/internal/transport"
+	"github.com/mtgo-labs/raw/tgerr"
 	"github.com/mtgo-labs/raw/tl"
 )
 
 // InboundResult reports protocol work completed by one decrypted message.
 type InboundResult struct {
-	Resolved       int
-	Controls       []ControlEvent
-	AcknowledgeIDs []int64
-	Pings          []InboundPing
-	Pongs          []InboundPong
-	Object         tl.Object
-	Updates        []tl.UpdatesClass
-	RetryMessages  []tl.MTPMessage
-	ResendIDs      []int64
-	ResetSession   bool
+	Resolved        int
+	Controls        []ControlEvent
+	AcknowledgeIDs  []int64
+	Pings           []InboundPing
+	Pongs           []InboundPong
+	Object          tl.Object
+	Updates         []tl.UpdatesClass
+	RecoveryTargets []RecoveryTarget
+	ResendIDs       []int64
+	ResetSession    bool
 }
 
 type InboundPing struct {
@@ -161,7 +162,7 @@ func routeInboundObjectAt(
 			result.Pings = append(result.Pings, child.Pings...)
 			result.Pongs = append(result.Pongs, child.Pongs...)
 			result.Updates = append(result.Updates, child.Updates...)
-			result.RetryMessages = append(result.RetryMessages, child.RetryMessages...)
+			result.RecoveryTargets = append(result.RecoveryTargets, child.RecoveryTargets...)
 			result.ResendIDs = append(result.ResendIDs, child.ResendIDs...)
 			result.ResetSession = result.ResetSession || child.ResetSession
 			if child.Object != nil {
@@ -206,13 +207,13 @@ func routeInboundObjectAt(
 			result.Updates = []tl.UpdatesClass{&tl.UpdatesTooLong{}}
 		}
 		if applied {
-			result.RetryMessages = recoverPending(state, pending, now, func(request *PendingRequest) bool {
+			result.RecoveryTargets = append(result.RecoveryTargets, pending.recoveryTargets(func(request *PendingRequest) bool {
 				rootMessageID := request.wireMessageID
 				if request.containerID != 0 {
 					rootMessageID = request.containerID
 				}
 				return rootMessageID < uint64(value.FirstMessageID)
-			})
+			})...)
 		}
 		return result, nil
 	case *tl.MTPMessagesAllInfo:
@@ -229,7 +230,7 @@ func routeInboundObjectAt(
 				0,
 				now,
 			)
-			result.RetryMessages = append(result.RetryMessages, info.RetryMessages...)
+			result.RecoveryTargets = append(result.RecoveryTargets, info.RecoveryTargets...)
 		}
 		return result, nil
 	case *tl.MTPMessageDetailedInfo:
@@ -267,30 +268,30 @@ func routeInboundObjectAt(
 			if err := state.ApplyControl(event); err != nil {
 				return InboundResult{}, err
 			}
-			result.RetryMessages = recoverPending(state, pending, now, func(request *PendingRequest) bool {
+			result.RecoveryTargets = append(result.RecoveryTargets, pending.recoveryTargets(func(request *PendingRequest) bool {
 				return request.wireMessageID == uint64(event.MessageID) ||
 					request.containerID == uint64(event.MessageID)
-			})
+			})...)
 		case ControlBadMessage:
 			switch event.ErrorCode {
 			case 16:
 				if err := state.CorrectTime(now, messageID, false); err != nil {
 					return InboundResult{}, err
 				}
-				result.RetryMessages = recoverPending(state, pending, now, func(request *PendingRequest) bool {
+				result.RecoveryTargets = append(result.RecoveryTargets, pending.recoveryTargets(func(request *PendingRequest) bool {
 					return request.wireMessageID == uint64(event.MessageID) ||
 						request.containerID == uint64(event.MessageID)
-				})
+				})...)
 			case 17:
 				if err := state.CorrectTime(now, messageID, true); err != nil {
 					return InboundResult{}, err
 				}
 				result.ResetSession = true
 			case 20:
-				result.RetryMessages = recoverPending(state, pending, now, func(request *PendingRequest) bool {
+				result.RecoveryTargets = append(result.RecoveryTargets, pending.recoveryTargets(func(request *PendingRequest) bool {
 					return request.wireMessageID == uint64(event.MessageID) ||
 						request.containerID == uint64(event.MessageID)
-				})
+				})...)
 			default:
 				result.ResetSession = true
 			}
@@ -298,6 +299,18 @@ func routeInboundObjectAt(
 			// Pinned mtcute and TDLib do not resend client-received messages.
 		}
 		return result, nil
+	}
+	// The server answers a message whose id fell below its session high-water
+	// mark with rpc error 500 MSGID_DECREASE_RETRY instead of executing it.
+	// Recover by re-sending with a fresh id; the error itself resolves the
+	// request only when this recovery was already spent once.
+	if rpcResult, ok := object.(*tl.MTPRPCResult); ok {
+		if rpcError := decodeRPCError(rpcResult, rawBody); rpcError != nil &&
+			rpcError.ErrorCode == 500 && rpcError.ErrorMessage == tgerr.ErrMsgIDDecreaseRetry {
+			if targets := pending.decreaseRetryTargets(uint64(rpcResult.ReqMessageID)); len(targets) != 0 {
+				return InboundResult{Object: object, RecoveryTargets: targets}, nil
+			}
+		}
 	}
 	resolved, err := pending.ResolveMessage(object, rawBody)
 	if err != nil {
@@ -323,7 +336,7 @@ func recoverFromMessageInfo(
 			return InboundResult{}
 		}
 		retry := func() InboundResult {
-			return InboundResult{RetryMessages: recoverPending(state, pending, now, func(request *PendingRequest) bool {
+			return InboundResult{RecoveryTargets: pending.recoveryTargets(func(request *PendingRequest) bool {
 				return request.wireMessageID == messageID || request.containerID == messageID
 			})}
 		}

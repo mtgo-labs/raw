@@ -6,10 +6,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/mtgo-labs/raw/internal/mtproto"
 	"github.com/mtgo-labs/raw/tgerr"
+	"github.com/mtgo-labs/raw/tl"
 )
 
 type clientReconnect struct {
@@ -160,15 +162,35 @@ func (client *Client) connectRecoveredRoute(ctx context.Context, key routeKey, s
 	if err != nil {
 		return err
 	}
-	route := &clientRoute{connection: connection, session: sessionState}
-	route.sender = client.startRouteSenderLocked(key, sessionState, connection, &route.writeMu)
-	for _, message := range sessionState.RecoveryMessages() {
-		if err := route.sender.enqueueRetry(message); err != nil {
-			route.sender.halt()
-			_ = client.pool.Discard(poolKey, connection)
-			return err
-		}
+	// The server-side msg_id high-water mark of the dropped session is
+	// unknown: messages the server did process advanced it past the ones
+	// still unresolved here. Recover under a fresh session id with fresh
+	// message ids; re-sending the original ids would draw
+	// MSGID_DECREASE_RETRY.
+	var sessionID [8]byte
+	if _, err := rand.Read(sessionID[:]); err != nil {
+		_ = client.pool.Discard(poolKey, connection)
+		return err
 	}
+	now := client.now()
+	messages := sessionState.ResetAndRecover(sessionID, now)
+	route := &clientRoute{connection: connection, session: sessionState}
+	writeMu := &route.writeMu
+	if primary {
+		writeMu = &client.writeMu
+		client.sendMu.Lock()
+		client.initConnectionDone = false
+		client.ordering = nil
+		client.sendMu.Unlock()
+	}
+	// Flush before the route is published: no other writer exists yet, so the
+	// recovered ids reach the wire in allocation order and every message
+	// sent after reconnect is allocated above them.
+	if err := writeRecoveredMessages(sessionState, connection, writeMu, messages, now); err != nil {
+		_ = client.pool.Discard(poolKey, connection)
+		return err
+	}
+	route.sender = client.startRouteSenderLocked(key, sessionState, connection, writeMu)
 	if primary {
 		client.conn = connection
 		client.sender = route.sender
@@ -177,8 +199,40 @@ func (client *Client) connectRecoveredRoute(ctx context.Context, key routeKey, s
 		client.routes[key] = route
 		client.resetRouteIdleTimerLocked(key, route)
 	}
-	client.startRouteLivenessLocked(key, sessionState, connection, &route.writeMu)
+	client.startRouteLivenessLocked(key, sessionState, connection, writeMu)
 	client.startReceiveRouteLocked(key, route)
+	return nil
+}
+
+// writeRecoveredMessages writes one recovered batch in container-sized
+// chunks. Chunks are written in order and each container id is allocated
+// after its children, so the ids stay monotonically increasing on the wire.
+func writeRecoveredMessages(
+	sessionState *mtproto.Session,
+	connection net.Conn,
+	writeMu *sync.Mutex,
+	messages []tl.MTPMessage,
+	now time.Time,
+) error {
+	for start := 0; start < len(messages); {
+		end := start
+		packetSize := 0
+		for end < len(messages) && end-start < mtproto.MaxContainerMessages {
+			messageSize := 16 + int(messages[end].Bytes)
+			if end != start && packetSize+messageSize > mtproto.MaxContainerPayload {
+				break
+			}
+			packetSize += messageSize
+			end++
+		}
+		writeMu.Lock()
+		_, err := sessionState.SendPrepared(connection, rand.Reader, now, messages[start:end], nil, false)
+		writeMu.Unlock()
+		if err != nil {
+			return err
+		}
+		start = end
+	}
 	return nil
 }
 
@@ -217,10 +271,8 @@ func (client *Client) failConnectedRoute(key routeKey, sessionState *mtproto.Ses
 	preserve := reconnectable && len(sessionState.RecoveryMessages()) != 0
 	client.mu.Unlock()
 
-	if preserve {
-		route.sender.halt()
-	} else {
-		route.sender.stopAndCancel(err)
+	route.sender.halt()
+	if !preserve {
 		sessionState.Close(err)
 	}
 	_ = client.pool.Discard(mtproto.PoolKey{

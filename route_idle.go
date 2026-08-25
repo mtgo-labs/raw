@@ -68,7 +68,7 @@ func (client *Client) closeIdleRoute(key routeKey, route *clientRoute, idle *rou
 	client.stopRouteLivenessLocked(key, route.session)
 	client.mu.Unlock()
 
-	route.sender.stopAndCancel(mtproto.ErrSessionClosed)
+	route.sender.halt()
 	route.session.Close(mtproto.ErrSessionClosed)
 	_ = client.pool.Discard(mtproto.PoolKey{
 		DCID: key.dcid, Kind: mtproto.ConnectionKind(key.kind), Slot: key.slot,
