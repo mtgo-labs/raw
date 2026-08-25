@@ -312,7 +312,6 @@ func TestConcurrentWritersKeepWireIDsMonotonic(t *testing.T) {
 
 	type wireFrame struct {
 		messageID uint64
-		err       error
 	}
 	frames := make(chan wireFrame, 1024)
 	readerDone := make(chan struct{})
