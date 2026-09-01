@@ -51,11 +51,17 @@ type PendingTable struct {
 	capacity int
 }
 
+// pendingMapHint caps the map preallocation size. The configured capacity
+// is a limit, not a steady-state size — most sessions hold a handful of
+// pending requests, and a 128-slot hint cost several KiB per connection
+// across large fleets. The map grows on demand up to the limit either way.
+const pendingMapHint = 8
+
 func NewPendingTable(capacity int) *PendingTable {
 	if capacity < 1 {
 		capacity = 1
 	}
-	return &PendingTable{entries: make(map[uint64]*PendingRequest, capacity), capacity: capacity}
+	return &PendingTable{entries: make(map[uint64]*PendingRequest, min(capacity, pendingMapHint)), capacity: capacity}
 }
 func (table *PendingTable) Add(messageID uint64) (*PendingRequest, error) {
 	return table.AddMessage(messageID, tl.MTPMessage{}, false)

@@ -20,6 +20,15 @@ const (
 
 const PacketFrameHeadroom = 4
 
+// readBufferSize sizes the per-connection buffered reader. Typical MTProto
+// traffic (RPC frames, acks, pings) is well under this size; larger reads
+// bypass the buffer entirely — bufio reads straight into the caller's slice
+// when its buffer is empty and the request is at least this size — so a
+// small buffer only costs an extra syscall for mid-sized messages. At
+// 32 KiB per connection, a fleet of thousands of clients paid hundreds of
+// megabytes for read buffers alone.
+const readBufferSize = 4096
+
 type PacketConn struct {
 	net.Conn
 	mode   PacketMode
@@ -61,7 +70,7 @@ func NewPacketConn(connection net.Conn, mode PacketMode) (*PacketConn, error) {
 	if connection == nil || mode > PacketPaddedIntermediate {
 		return nil, errors.New("transport: invalid packet connection")
 	}
-	return &PacketConn{Conn: connection, mode: mode, reader: bufio.NewReaderSize(connection, 32768)}, nil
+	return &PacketConn{Conn: connection, mode: mode, reader: bufio.NewReaderSize(connection, readBufferSize)}, nil
 }
 
 func (connection *PacketConn) WritePacket(payload []byte) error {

@@ -161,8 +161,12 @@ func decryptMessageEnvelope(authKey AuthKey, salt int64, sessionID [8]byte, payl
 	if err != nil || subtle.ConstantTimeCompare(computed[:], messageKey[:]) != 1 {
 		return 0, 0, nil, 0, ErrEncryptedMessageKey
 	}
-	body := make([]byte, bodyLength)
-	copy(body, plain[messageHeaderSize:messageHeaderSize+bodyLength])
+	// The body is a subslice of the decrypted plaintext, not a copy: the
+	// receive path already hands buffer-backed slices to waiters, and
+	// keeping header and padding (≤ 1 KiB) alive with a live body is
+	// cheaper than a second message-size allocation and copy per inbound
+	// message. The payload argument stays read-only.
+	body := plain[messageHeaderSize : messageHeaderSize+bodyLength]
 	return messageID, sequenceNo, body, envelopeSalt, nil
 }
 

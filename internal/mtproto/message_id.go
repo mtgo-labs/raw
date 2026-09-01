@@ -25,23 +25,33 @@ var (
 // incomingMessageIDs retains the greatest recent server IDs in sorted order.
 // The circular layout makes the normal monotonic insertion path O(1) after a
 // binary search, without allocating or shifting the fixed window.
+//
+// The container scratch workspace is a lazily allocated slice: it is touched
+// only when a container message is validated, but as a value field it used
+// to reserve 8 KiB per session for every connection — a fleet of thousands
+// of sessions paid megabytes for a buffer most never used.
 type incomingMessageIDs struct {
 	recent     [maxRecentIncomingMessageIDs]uint64
-	scratch    [maxContainerMessages + 1]uint64
+	scratch    []uint64
 	recentHead int
 	recentLen  int
 }
 
 func (ids *incomingMessageIDs) validateAndAdd(messageID uint64, object tl.Object, serverTime int64) error {
 	count := 1
-	ids.scratch[0] = messageID
-	if err := validateIncomingMessageID(messageID, object, serverTime); err != nil {
-		return err
-	}
 	if container, ok := object.(*tl.MTPMessageContainer); ok {
 		if len(container.Messages) > maxContainerMessages {
 			return ErrPendingContainer
 		}
+		count += len(container.Messages)
+	}
+	scratch := ids.growScratch(count)
+	scratch[0] = messageID
+	if err := validateIncomingMessageID(messageID, object, serverTime); err != nil {
+		return err
+	}
+	if container, ok := object.(*tl.MTPMessageContainer); ok {
+		written := 1
 		for _, message := range container.Messages {
 			entry := message
 			if entry.Body == nil {
@@ -57,12 +67,12 @@ func (ids *incomingMessageIDs) validateAndAdd(messageID uint64, object tl.Object
 			if err := validateIncomingMessageID(innerID, entry.Body, serverTime); err != nil {
 				return err
 			}
-			ids.scratch[count] = innerID
-			count++
+			scratch[written] = innerID
+			written++
 		}
 	}
 
-	candidates := ids.scratch[:count]
+	candidates := scratch[:count]
 	slices.Sort(candidates)
 	for index, candidate := range candidates {
 		if index > 0 && candidate == candidates[index-1] {
@@ -79,6 +89,20 @@ func (ids *incomingMessageIDs) validateAndAdd(messageID uint64, object tl.Object
 		}
 	}
 	return nil
+}
+
+// growScratch returns the container validation workspace sized for n
+// slots, allocating or growing it on demand — plain messages (n=1) ride a
+// one-element stack copy, so sessions without containers never allocate.
+// The caller holds the owning SessionState lock.
+func (ids *incomingMessageIDs) growScratch(n int) []uint64 {
+	if cap(ids.scratch) < n {
+		size := max(n, 8)
+		grown := make([]uint64, size)
+		copy(grown, ids.scratch)
+		ids.scratch = grown
+	}
+	return ids.scratch[:n]
 }
 
 func validateIncomingMessageID(messageID uint64, object tl.Object, serverTime int64) error {
