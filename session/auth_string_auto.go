@@ -111,6 +111,7 @@ func encodeRawSessionString(value SessionString, encryptionKey []byte, random io
 	clear(plaintext)
 	return rawSessionStringPrefix + base64.RawURLEncoding.EncodeToString(envelope), nil
 }
+
 func decodeRawSessionString(encoded string, encryptionKey []byte) (SessionString, error) {
 	if len(encryptionKey) != 32 {
 		return SessionString{}, ErrInvalidSessionString

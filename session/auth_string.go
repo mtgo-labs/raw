@@ -17,11 +17,9 @@ const (
 	maxInt53                   = 1<<53 - 1
 )
 
-var (
-	// ErrInvalidSessionString reports malformed, unauthenticated, or unsupported
-	// authorization-string data.
-	ErrInvalidSessionString = errors.New("session: invalid session string")
-)
+// ErrInvalidSessionString reports malformed, unauthenticated, or unsupported
+// authorization-string data.
+var ErrInvalidSessionString = errors.New("session: invalid session string")
 
 // SessionStringFormat identifies an automatically detected authorization string.
 type SessionStringFormat string

@@ -214,7 +214,6 @@ func FuzzDecodeGzipPacked(f *testing.F) {
 }
 
 func TestDecodeGzipPackedCustomDecompressor(t *testing.T) {
-
 	// Build a gzip_packed payload.
 	nearest := &NearestDC{Country: "US", ThisDC: 1, NearestDC: 2}
 	nearestInput, err := Encode(nearest)
@@ -245,7 +244,6 @@ func TestDecodeGzipPackedCustomDecompressor(t *testing.T) {
 }
 
 func TestGzipDecompressorBudgetExhaustion(t *testing.T) {
-
 	original := GzipDecompressor
 	GzipDecompressor = func(packed []byte, limit int) ([]byte, error) {
 		t.Errorf("decompressor called with exhausted budget (limit=%d)", limit)

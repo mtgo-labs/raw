@@ -87,6 +87,7 @@ func ReadPlain(reader io.Reader, maxBody int) (PlainMessage, error) {
 	}
 	return PlainMessage{MessageID: binary.LittleEndian.Uint64(payload[8:16]), Body: payload[20 : 20+bodyLength]}, nil
 }
+
 func readPlainPacket(reader io.Reader, maxPayload int) ([]byte, error) {
 	if packetReader, ok := reader.(interface {
 		ReadPlainPacket(int) ([]byte, error)

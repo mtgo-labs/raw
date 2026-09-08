@@ -34,6 +34,7 @@ func (session *Session) Send(writer io.Writer, random io.Reader, now time.Time, 
 	}
 	return SendSessionObject(writer, random, session.state, session.pending, *session.authKey.Load(), now, object)
 }
+
 func (session *Session) Prepare(now time.Time, object tl.Object) (tl.MTPMessage, *PendingRequest, error) {
 	if session == nil || session.closed.Load() {
 		return tl.MTPMessage{}, nil, ErrSessionClosed

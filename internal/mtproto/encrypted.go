@@ -211,15 +211,18 @@ func putUint64(output []byte, value uint64) {
 	output[6] = byte(value >> 48)
 	output[7] = byte(value >> 56)
 }
+
 func putUint32(output []byte, value uint32) {
 	output[0] = byte(value)
 	output[1] = byte(value >> 8)
 	output[2] = byte(value >> 16)
 	output[3] = byte(value >> 24)
 }
+
 func readUint64(input []byte) uint64 {
 	return uint64(input[0]) | uint64(input[1])<<8 | uint64(input[2])<<16 | uint64(input[3])<<24 | uint64(input[4])<<32 | uint64(input[5])<<40 | uint64(input[6])<<48 | uint64(input[7])<<56
 }
+
 func readUint32(input []byte) uint32 {
 	return uint32(input[0]) | uint32(input[1])<<8 | uint32(input[2])<<16 | uint32(input[3])<<24
 }

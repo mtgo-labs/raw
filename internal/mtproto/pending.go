@@ -63,6 +63,7 @@ func NewPendingTable(capacity int) *PendingTable {
 	}
 	return &PendingTable{entries: make(map[uint64]*PendingRequest, min(capacity, pendingMapHint)), capacity: capacity}
 }
+
 func (table *PendingTable) Add(messageID uint64) (*PendingRequest, error) {
 	return table.AddMessage(messageID, tl.MTPMessage{}, false)
 }
@@ -86,6 +87,7 @@ func (table *PendingTable) AddMessage(messageID uint64, message tl.MTPMessage, r
 	table.entries[messageID] = request
 	return request, nil
 }
+
 func (table *PendingTable) Resolve(messageID uint64, result PendingResult) bool {
 	if table == nil || messageID == 0 {
 		return false

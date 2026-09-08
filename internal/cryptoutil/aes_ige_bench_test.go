@@ -2,8 +2,10 @@ package cryptoutil
 
 import "testing"
 
-var benchmarkIGEByte byte
-var benchmarkIGEBlock AES256
+var (
+	benchmarkIGEByte  byte
+	benchmarkIGEBlock AES256
+)
 
 func BenchmarkAESIGEEncrypt(b *testing.B) {
 	for _, size := range []int{32, 64, 256, 1024, 1 << 20} {

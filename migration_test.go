@@ -7,12 +7,12 @@ import (
 	"io"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/mtgo-labs/raw/internal/mtproto"
 	"github.com/mtgo-labs/raw/session"
 	"github.com/mtgo-labs/raw/tgerr"
 	"github.com/mtgo-labs/raw/tl"
-	"time"
 )
 
 func TestTransferAuthorizationBuildsExactRequests(t *testing.T) {
