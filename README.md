@@ -21,7 +21,9 @@ user, _ := raw.Invoke(ctx, client, &tl.UsersGetUsersRequest{
 - Intermediate, abridged, padded, and obfuscated transports
 - TCP_NODELAY enabled by default
 - Connection pooling, reconnect, DC migration, PFS temporary keys
-- Import session strings from the native MTGO1 format, Pyrogram, Telethon, mtcute, and other formats (auto-detected), and export them back via `session.EncodeMTGOSessionString`
+- Import session strings from the native MTGO1 format, Pyrogram, Telethon,
+  mtcute, and other formats (auto-detected)
+- Export authorization state with session.EncodeMTGOSessionString
 
 ## Install
 
