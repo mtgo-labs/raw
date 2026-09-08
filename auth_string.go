@@ -6,9 +6,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net"
 
 	"github.com/mtgo-labs/raw/session"
+	"github.com/mtgo-labs/raw/tl"
 )
 
 func applySessionString(config *Config) error {
@@ -78,26 +78,34 @@ func applySessionString(config *Config) error {
 	return nil
 }
 
-// ExportSessionString encrypts the current permanent authorization into the
-// mtgo-raw raw1 format with AES-256-GCM. encryptionKey must be a caller-owned
-// 32-byte random key and is not embedded in the result.
-func (client *Client) ExportSessionString(ctx context.Context, encryptionKey []byte) (string, error) {
+// ExportSessionString exports the current authorization as a native mtgo MTGO1
+// session string ("MTGO1.<payload>"). The payload is fully self-contained: it
+// carries the phone number, user ID, API ID, API hash, data-center ID, and the
+// 256-byte auth key, so a fresh Client can resume the session from the string
+// alone (user ID and bot flag are fetched live via users.getUsers).
+//
+// ExportSessionString requires a live connection and a configured API hash.
+func (client *Client) ExportSessionString(ctx context.Context) (string, error) {
 	if client == nil {
 		return "", ErrInvalidConfig
 	}
 	if ctx == nil {
 		return "", context.Canceled
 	}
-	client.mu.Lock()
-	defer client.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-
+	client.mu.Lock()
 	dcid := client.config.DCID
+	apiID := client.config.APIID
+	apiHash := client.config.APIHash
+	phone := client.config.Phone
+	testMode := client.config.TestMode
 	authKey := client.exportAuthKeyLocked()
-	if len(authKey) == 0 && client.config.Store != nil {
-		data, err := client.config.Store.Load(ctx)
+	store := client.config.Store
+	client.mu.Unlock()
+	if len(authKey) == 0 && store != nil {
+		data, err := store.Load(ctx)
 		if err != nil {
 			if errors.Is(err, session.ErrSessionNotFound) {
 				return "", ErrNoAuthKey
@@ -122,38 +130,37 @@ func (client *Client) ExportSessionString(ctx context.Context, encryptionKey []b
 		return "", ErrNoAuthKey
 	}
 	defer clear(authKey)
-
-	address := client.config.Address
-	if endpoint, ok := client.endpoints.Get(dcid); ok {
-		address = endpoint.Address
-	} else if configured, ok := client.config.DCAddresses[dcid]; ok {
-		address = configured
-	} else if dcid != client.config.DCID {
-		return "", ErrUnsupportedRoute
+	if dcid <= 0 || dcid > 5 {
+		return "", fmt.Errorf("%w: primary DC is not configured", ErrInvalidConfig)
 	}
-	host, _, err := net.SplitHostPort(address)
+	if apiID <= 0 {
+		return "", fmt.Errorf("%w: api id is not configured", ErrInvalidConfig)
+	}
+	if apiHash == "" {
+		return "", fmt.Errorf("%w: api hash is not configured", ErrInvalidConfig)
+	}
+	users, err := Invoke(ctx, client, &tl.UsersGetUsersRequest{ID: []tl.InputUserClass{&tl.InputUserSelf{}}})
 	if err != nil {
-		return "", fmt.Errorf("%w: invalid primary DC address", ErrInvalidConfig)
+		return "", fmt.Errorf("export session: get self user: %w", err)
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return "", fmt.Errorf("%w: primary DC address is not an IP endpoint", ErrInvalidConfig)
+	var self *tl.User
+	for _, user := range users {
+		if candidate, ok := user.(*tl.User); ok && candidate.Self {
+			self = candidate
+			break
+		}
 	}
-	primary := session.SessionStringDC{
-		ID:       dcid,
-		Address:  address,
-		IPv6:     ip.To4() == nil,
-		TestMode: client.config.TestMode,
+	if self == nil {
+		return "", errors.New("export session: self user missing from users.getUsers response")
 	}
-	return session.EncodeSessionString(session.SessionString{
-		Format:        session.SessionStringFormatRaw,
-		APIID:         client.config.APIID,
-		Main:          primary,
-		Media:         primary,
-		AuthKey:       authKey,
-		AddressKnown:  true,
-		TestModeKnown: true,
-	}, encryptionKey)
+	return session.EncodeMTGOSessionString(session.SessionString{
+		APIID:       apiID,
+		Main:        session.SessionStringDC{ID: dcid, TestMode: testMode},
+		User:        &session.SessionStringUser{ID: self.ID, Bot: self.Bot},
+		AuthKey:     authKey,
+		APIHash:     apiHash,
+		PhoneNumber: phone,
+	})
 }
 
 func (client *Client) exportAuthKeyLocked() []byte {

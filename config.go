@@ -204,8 +204,9 @@ type Config struct {
 	Address     string
 	DCAddresses map[int]string
 	DCAuthKeys  map[int]AuthKeyConfig
-	// SessionString is an mtcute, Pyrogram, Telethon, or encrypted mtgo-raw
-	// authorization string. NewClient auto-detects the format.
+	// SessionString is a native mtgo (MTGO1), mtcute, Pyrogram, Telethon, or
+	// encrypted mtgo-raw authorization string. NewClient auto-detects the
+	// format.
 	SessionString string
 	// SessionStringKey decrypts mtgo-raw strings. It must be 32 bytes, is ignored
 	// by no other format, and is not retained by Client.

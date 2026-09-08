@@ -7,10 +7,15 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mtgo-labs/raw/internal/mtproto"
 	"github.com/mtgo-labs/raw/session"
+	"github.com/mtgo-labs/raw/tl"
 )
 
 func TestNewClientImportsMtcuteSessionString(t *testing.T) {
@@ -207,38 +212,120 @@ func TestNewClientSessionStringValidatesConflictsAndBackend(t *testing.T) {
 	_ = client.Close()
 }
 
-func TestClientExportsEncryptedRawSessionString(t *testing.T) {
-	authKey := bytes.Repeat([]byte{0x5a}, 256)
-	encryptionKey := bytes.Repeat([]byte{0x7c}, 32)
-	encoded := testSessionString(t, session.SessionString{
-		Version: session.MtcuteSessionStringVersion,
-		Main:    session.SessionStringDC{ID: 2, Address: "149.154.167.50:443"},
-		AuthKey: authKey,
-	})
-	client, err := NewClient(Config{APIID: 1, SessionString: encoded})
+// newMTGOExportTestClient wires a client to a net.Pipe connection with the
+// given auth key so ExportSessionString can invoke users.getUsers against the
+// returned server side. When permanent is true the key is also registered as
+// the client's permanent authorization.
+func newMTGOExportTestClient(t *testing.T, cfg Config, key mtproto.AuthKey, permanent bool) (*Client, net.Conn) {
+	t.Helper()
+	client, err := NewClient(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
-	exported, err := client.ExportSessionString(context.Background(), encryptionKey)
+	clientConn, serverConn := net.Pipe()
+	sessionID := [8]byte{9}
+	sessionState := mtproto.NewSession(key, 0, sessionID, 4)
+	client.mu.Lock()
+	client.conn = clientConn
+	client.session = sessionState
+	if permanent {
+		client.permanent = authState{key: key, sessionID: sessionID}
+	}
+	client.initConnectionDone = true
+	client.startReceiveRouteLocked(
+		routeKey{dcid: client.config.DCID, kind: ConnectionMain},
+		&clientRoute{connection: clientConn, session: sessionState},
+	)
+	client.mu.Unlock()
+	t.Cleanup(func() { _ = serverConn.Close() })
+	t.Cleanup(func() { _ = client.Close() })
+	return client, serverConn
+}
+
+// serveGetMeRequest answers the next client request with a users.getUsers
+// result containing the given self user.
+func serveGetMeRequest(serverConn net.Conn, key mtproto.AuthKey, sessionID [8]byte, user *tl.User) chan error {
+	done := make(chan error, 1)
+	go func() {
+		messageID, body, err := readClientRequest(serverConn, key, sessionID)
+		if err == nil && binary.LittleEndian.Uint32(body) != tl.UsersGetUsersRequestConstructorID {
+			err = fmt.Errorf("constructor=%#x", binary.LittleEndian.Uint32(body))
+		}
+		if err == nil {
+			var userBody []byte
+			userBody, err = tl.Encode(user)
+			if err == nil {
+				vector := make([]byte, 0, 8+len(userBody))
+				vector = binary.LittleEndian.AppendUint32(vector, 0x1cb5c415)
+				vector = binary.LittleEndian.AppendUint32(vector, 1)
+				vector = append(vector, userBody...)
+				err = writeServerResultRaw(serverConn, key, sessionID, messageID, vector)
+			}
+		}
+		done <- err
+	}()
+	return done
+}
+
+// stringPtr returns a pointer to a string for tl.User optional string fields.
+func stringPtr(s string) *string { return &s }
+
+// int32Ptr returns a pointer to an int32 for tl.User optional int fields.
+func int32Ptr(v int32) *int32 { return &v }
+
+func TestClientExportsMTGOSessionString(t *testing.T) {
+	const apiHash = "89abcdef0123456789abcdef01234567"
+	key := testAuthKey(4)
+	client, serverConn := newMTGOExportTestClient(t, Config{
+		APIID:   611335,
+		APIHash: apiHash,
+		Phone:   "+9996621234",
+		DCID:    4,
+		Address: "149.154.167.91:443",
+	}, key, true)
+	serverDone := serveGetMeRequest(serverConn, key, [8]byte{9},
+		&tl.User{Self: true, Bot: true, BotInfoVersion: int32Ptr(1), ID: 777, FirstName: stringPtr("T"), LastName: stringPtr("B")})
+
+	exportDone := make(chan struct{})
+	var exported string
+	var exportErr error
+	go func() {
+		exported, exportErr = client.ExportSessionString(context.Background())
+		close(exportDone)
+	}()
+	select {
+	case <-exportDone:
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("server: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("export did not complete")
+	}
+	<-exportDone
+	if exportErr != nil {
+		t.Fatal(exportErr)
+	}
+	value, err := session.DecodeSessionString(exported, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := session.DecodeSessionString(exported, encryptionKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if value.Format != session.SessionStringFormatRaw || value.APIID != 1 ||
-		value.Main.ID != 2 || value.Main.Address != "149.154.167.50:443" || value.Media != value.Main ||
-		value.User != nil || !bytes.Equal(value.AuthKey, authKey) {
+	if value.Format != session.SessionStringFormatMTGO || value.APIID != 611335 ||
+		value.APIHash != apiHash || value.PhoneNumber != "+9996621234" ||
+		value.Main.ID != 4 || value.Main.TestMode ||
+		value.User == nil || value.User.ID != 777 || !value.User.Bot ||
+		!bytes.Equal(value.AuthKey, key.Key[:]) {
 		t.Fatalf("value=%+v", value)
 	}
 }
 
 func TestClientExportsStoredPrimarySessionString(t *testing.T) {
+	const apiHash = "0123456789abcdef0123456789abcdef"
 	authKey := bytes.Repeat([]byte{0x6b}, 256)
-	encryptionKey := bytes.Repeat([]byte{0x7d}, 32)
 	digest := sha1.Sum(authKey)
+	var key mtproto.AuthKey
+	copy(key.Key[:], authKey)
+	key.ID = binary.LittleEndian.Uint64(digest[12:20])
 	store := session.NewMemoryStore()
 	data, err := session.Encode(session.Snapshot{
 		APIID:     1,
@@ -256,25 +343,42 @@ func TestClientExportsStoredPrimarySessionString(t *testing.T) {
 	if err := store.Save(context.Background(), data); err != nil {
 		t.Fatal(err)
 	}
-	client, err := NewClient(Config{
+	client, serverConn := newMTGOExportTestClient(t, Config{
 		APIID:       1,
+		APIHash:     apiHash,
 		Address:     "149.154.167.50:443",
 		DCAddresses: map[int]string{4: "149.154.167.91:443"},
 		Store:       store,
-	})
+	}, key, false)
+	serverDone := serveGetMeRequest(serverConn, key, [8]byte{9},
+		&tl.User{Self: true, ID: 42, FirstName: stringPtr("T"), LastName: stringPtr("B")})
+
+	exportDone := make(chan struct{})
+	var exported string
+	var exportErr error
+	go func() {
+		exported, exportErr = client.ExportSessionString(context.Background())
+		close(exportDone)
+	}()
+	select {
+	case <-exportDone:
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("server: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("export did not complete")
+	}
+	<-exportDone
+	if exportErr != nil {
+		t.Fatal(exportErr)
+	}
+	value, err := session.DecodeSessionString(exported, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
-	exported, err := client.ExportSessionString(context.Background(), encryptionKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value, err := session.DecodeSessionString(exported, encryptionKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if value.Main.ID != 4 || value.Main.Address != "149.154.167.91:443" || !bytes.Equal(value.AuthKey, authKey) {
+	if value.Main.ID != 4 || value.User == nil || value.User.ID != 42 || value.User.Bot ||
+		value.APIHash != apiHash || !bytes.Equal(value.AuthKey, authKey) {
 		t.Fatalf("value=%+v", value)
 	}
 }
@@ -284,12 +388,12 @@ func TestClientExportSessionStringRejectsMissingOrCorruptState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.ExportSessionString(context.Background(), bytes.Repeat([]byte{1}, 32)); !errors.Is(err, ErrNoAuthKey) {
+	if _, err := client.ExportSessionString(context.Background()); !errors.Is(err, ErrNoAuthKey) {
 		t.Fatalf("missing key err=%v", err)
 	}
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := client.ExportSessionString(canceledCtx, bytes.Repeat([]byte{1}, 32)); !errors.Is(err, context.Canceled) {
+	if _, err := client.ExportSessionString(canceledCtx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled context err=%v", err)
 	}
 	_ = client.Close()
@@ -303,8 +407,18 @@ func TestClientExportSessionStringRejectsMissingOrCorruptState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	if _, err := client.ExportSessionString(context.Background(), bytes.Repeat([]byte{1}, 32)); !errors.Is(err, session.ErrInvalidSnapshot) {
+	if _, err := client.ExportSessionString(context.Background()); !errors.Is(err, session.ErrInvalidSnapshot) {
 		t.Fatalf("corrupt state err=%v", err)
+	}
+
+	key := testAuthKey(4)
+	client, _ = newMTGOExportTestClient(t, Config{
+		APIID:   1,
+		DCID:    4,
+		Address: "149.154.167.91:443",
+	}, key, true)
+	if _, err := client.ExportSessionString(context.Background()); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("missing api hash err=%v", err)
 	}
 }
 
