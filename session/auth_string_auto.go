@@ -18,12 +18,15 @@ const (
 	rawSessionStringAAD     = "mtgo-raw/auth-string/v1"
 )
 
-// DecodeSessionString automatically decodes mtgo-raw, mtcute v3, Pyrogram, or
-// Telethon authorization strings. encryptionKey is required only for raw1
-// strings and must contain exactly 32 bytes.
+// DecodeSessionString automatically decodes mtgo-raw, mtcute v3, Pyrogram,
+// Telethon, or native mtgo (MTGO1) authorization strings. encryptionKey is
+// required only for raw1 strings and must contain exactly 32 bytes.
 func DecodeSessionString(encoded string, encryptionKey []byte) (SessionString, error) {
 	if strings.HasPrefix(encoded, rawSessionStringPrefix) {
 		return decodeRawSessionString(encoded, encryptionKey)
+	}
+	if strings.HasPrefix(encoded, mtgoStringPrefix) {
+		return DecodeMTGOSessionString(encoded)
 	}
 	payload, _ := decodeAuthBase64(encoded)
 	defer clear(payload)

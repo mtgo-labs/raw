@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/mtgo-labs/raw/session"
@@ -106,6 +107,52 @@ func TestNewClientAutomaticallyImportsPyrogramTelethonAndRaw(t *testing.T) {
 	}
 	if !bytes.Equal(encryptionKey, bytes.Repeat([]byte{0x91}, 32)) {
 		t.Fatal("NewClient modified the caller-owned encryption key")
+	}
+}
+
+func TestNewClientImportsMTGOSessionString(t *testing.T) {
+	authKey := bytes.Repeat([]byte{0x6e}, 256)
+	encoded, err := session.EncodeMTGOSessionString(session.SessionString{
+		APIID:       22333936,
+		Main:        session.SessionStringDC{ID: 4},
+		User:        &session.SessionStringUser{ID: 12345, Bot: true},
+		AuthKey:     authKey,
+		APIHash:     "89abcdef0123456789abcdef01234567",
+		PhoneNumber: "+9996621234",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(Config{SessionString: encoded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	digest := sha1.Sum(authKey)
+	wantID := binary.LittleEndian.Uint64(digest[12:20])
+	if client.config.APIID != 22333936 || client.config.APIHash != "89abcdef0123456789abcdef01234567" ||
+		client.config.DCID != 4 || client.config.Address != "149.154.167.91:443" ||
+		client.config.AuthKeyID != wantID || !bytes.Equal(client.config.AuthKey, authKey) ||
+		client.config.SessionString != "" {
+		t.Fatalf("config=%+v", client.config)
+	}
+}
+
+func TestNewClientRejectsUnsupportedMTGOVersion(t *testing.T) {
+	authKey := bytes.Repeat([]byte{0x6e}, 256)
+	encoded, err := session.EncodeMTGOSessionString(session.SessionString{
+		APIID:   22333936,
+		Main:    session.SessionStringDC{ID: 4},
+		User:    &session.SessionStringUser{ID: 12345},
+		AuthKey: authKey,
+		APIHash: "89abcdef0123456789abcdef01234567",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := "MTGO2." + strings.TrimPrefix(encoded, "MTGO1.")
+	if _, err := NewClient(Config{SessionString: future}); err == nil {
+		t.Fatal("accepted unsupported MTGO2 session string")
 	}
 }
 

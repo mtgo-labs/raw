@@ -31,6 +31,7 @@ const (
 	SessionStringFormatMtcute   SessionStringFormat = "mtcute"
 	SessionStringFormatPyrogram SessionStringFormat = "pyrogram"
 	SessionStringFormatTelethon SessionStringFormat = "telethon"
+	SessionStringFormatMTGO     SessionStringFormat = "mtgo"
 )
 
 // SessionStringDC is one mtcute string-session data-center endpoint.
@@ -61,6 +62,12 @@ type SessionString struct {
 	AuthKey       []byte
 	AddressKnown  bool
 	TestModeKnown bool
+	// APIHash is the 32-hex-char API hash from my.telegram.org. Only the
+	// native mtgo format carries it.
+	APIHash string
+	// PhoneNumber is the account phone in international format. Only the
+	// native mtgo format carries it; it is empty for bot sessions.
+	PhoneNumber string
 }
 
 // DecodeMtcuteSessionString decodes and validates an mtcute v3 string session.

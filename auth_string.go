@@ -63,6 +63,9 @@ func applySessionString(config *Config) error {
 	if config.APIID == 0 {
 		config.APIID = value.APIID
 	}
+	if config.APIHash == "" && value.APIHash != "" {
+		config.APIHash = value.APIHash
+	}
 	if value.TestModeKnown {
 		config.TestMode = value.Main.TestMode
 	}
