@@ -17,7 +17,7 @@ user, _ := raw.Invoke(ctx, client, &tl.UsersGetUsersRequest{
 
 - Full MTProto 2.0: encrypted transport, auth key negotiation, sessions
 - Zero-allocation AES-256-IGE encryption
-- Compile-time typed TL schema with generated encode/decode (layer 228)
+- Compile-time typed TL schema with generated encode/decode (layer 230)
 - Intermediate, abridged, padded, and obfuscated transports
 - TCP_NODELAY enabled by default
 - Connection pooling, reconnect, DC migration, PFS temporary keys

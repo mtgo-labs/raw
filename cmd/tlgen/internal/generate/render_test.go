@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-const pinnedCommit = "2af1d0d5564a2a5b231c055cda53a7eb19a401eb"
+const pinnedCommit = "d36272b193057a114ef3a9fe7f15a8f8b587c489"
 
 func TestRenderPinnedSchemas(t *testing.T) {
 	t.Parallel()
@@ -26,8 +26,8 @@ func TestRenderPinnedSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if len(outputs) != 53 {
-		t.Fatalf("outputs = %d, want 53", len(outputs))
+	if len(outputs) != 55 {
+		t.Fatalf("outputs = %d, want 55", len(outputs))
 	}
 
 	var typeCount, constCount, functionCount int
@@ -59,18 +59,18 @@ func TestRenderPinnedSchemas(t *testing.T) {
 			}
 		}
 	}
-	if typeCount != 3155 {
-		t.Fatalf("generated types = %d, want 3155", typeCount)
+	if typeCount != 3272 {
+		t.Fatalf("generated types = %d, want 3272", typeCount)
 	}
-	if constCount != 2517 {
-		t.Fatalf("generated constants = %d, want 2517", constCount)
+	if constCount != 2601 {
+		t.Fatalf("generated constants = %d, want 2601", constCount)
 	}
-	if functionCount != 19957 {
-		t.Fatalf("generated functions = %d, want 19957", functionCount)
+	if functionCount != 20625 {
+		t.Fatalf("generated functions = %d, want 20625", functionCount)
 	}
 
 	assertOutputContains(t, outputs, "tl/api.go", []string{
-		"const Layer = 229",
+		"const Layer = 230",
 		"func decodeObject(input *decoder) (Object, error)",
 	})
 	assertOutputContains(t, outputs, "tl/api_core_u.go", []string{

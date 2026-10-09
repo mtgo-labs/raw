@@ -1,29 +1,44 @@
 # Pinned upstream sources for schemas, errors, and RSA keys.
 #
-# The API schema is normally taken from mtcute. mtcute has not published a
-# layer 229 schema yet, so api-schema.json was surgically patched from
-# tdesktop's api.tl (layer 229): constructor IDs, arguments, predicates, and
-# vector modifiers were derived from the TL text, while existing comments,
-# int53 annotations, and union comments from the mtcute pin were preserved
-# entry-by-entry. The MTProto schema, error list, and RSA keys are unchanged
-# upstream and remain pinned to mtcute.
+# The API schema base is mtcute's published layer 229 JSON. mtcute has not
+# published a layer 230 schema yet, so api-schema.json was rebased onto the
+# mtcute 229 JSON (which also restored messageActionChatJoinedViaCommunity,
+# a mid-layer 229 addition the previous pin predates) and then surgically
+# patched from tdesktop's api.tl (layer 230): constructor IDs, arguments,
+# predicates, and vector modifiers were derived from the TL text, while
+# existing comments, int53 annotations, union comments, throws, and
+# availability from the mtcute pin were preserved entry-by-entry. The
+# MTProto schema, error list, and RSA keys are unchanged upstream and
+# remain pinned to mtcute.
+#
+# Verification: the layer 230 TL was cross-checked entry-for-entry against
+# tdlib's independent layer 230 scheme (identical IDs and definitions for
+# all shared entries), the mtcute base was field-by-field cross-checked
+# against the final layer 229 TL (11d18d82), and the patched JSON was
+# field-by-field cross-checked against the layer 230 TL. CRC32 was
+# recomputed over every canonical definition for information: entries
+# whose IDs do not recompute carry historically-minted IDs (Telegram keeps
+# IDs across wire-compatible edits, e.g. username gained flags without a
+# new ID), which is why cross-referencing two independent official
+# schemes is used as ground truth instead.
 tdesktop_repository=https://github.com/telegramdesktop/tdesktop
-tdesktop_commit=db41bb8c753bf43b452a7b01c47f079ceb3dce09
+tdesktop_commit=d36272b193057a114ef3a9fe7f15a8f8b587c489
 tdesktop_schema_source=Telegram/SourceFiles/mtproto/scheme/api.tl
-tdesktop_derivation=schema/_old228.tl + schema/_new229.tl diff applied to the mtcute 228 JSON
+tdesktop_derivation=schema/_old229.tl + schema/_new230.tl diff applied to the mtcute 229 JSON
+tdesktop_cross_check=https://raw.githubusercontent.com/tdlib/td/master/td/generate/scheme/telegram_api.tl
 
 mtp_repository=https://github.com/mtcute/mtcute
-mtp_commit=2af1d0d5564a2a5b231c055cda53a7eb19a401eb
+mtp_commit=b4b9adda029c1f51b0132184553d6df6c3f3d173
 mtp_version=0.31.0
 mtp_schema_source=packages/core/src/tl/mtp-schema.json
 raw_errors_source=packages/core/src/tl/raw-errors.json
 rsa_keys_source=packages/core/scripts/tl/data/rsa-keys.txt
 
 # Generated-code provenance (embedded in tl/ headers).
-commit=db41bb8c753bf43b452a7b01c47f079ceb3dce09
-api_layer=229
-api_constructors=1657
-api_methods=814
-api_unions=613
+commit=d36272b193057a114ef3a9fe7f15a8f8b587c489
+api_layer=230
+api_constructors=1704
+api_methods=851
+api_unions=646
 api_union_comments=591
 mtp_constructors=45

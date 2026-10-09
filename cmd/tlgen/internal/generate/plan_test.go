@@ -20,8 +20,8 @@ func TestBuildPinnedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
-	if len(plan.Files) != 52 {
-		t.Fatalf("planned files = %d, want 52", len(plan.Files))
+	if len(plan.Files) != 54 {
+		t.Fatalf("planned files = %d, want 54", len(plan.Files))
 	}
 
 	var entries, unions int
@@ -49,20 +49,22 @@ func TestBuildPinnedPlan(t *testing.T) {
 	if entries != len(api.Entries)+len(mtp.Entries) {
 		t.Fatalf("planned entries = %d, want %d", entries, len(api.Entries)+len(mtp.Entries))
 	}
-	if entries != 2516 {
-		t.Fatalf("planned entries = %d, want pinned inventory 2516", entries)
+	if entries != 2600 {
+		t.Fatalf("planned entries = %d, want pinned inventory 2600", entries)
 	}
 	if unions != len(api.Unions)+len(mtp.Unions) {
 		t.Fatalf("planned unions = %d, want %d", unions, len(api.Unions)+len(mtp.Unions))
 	}
-	if unions != 639 || len(mtp.Unions) != 26 {
-		t.Fatalf("planned unions = %d (%d MTProto), want 639 (26 MTProto)", unions, len(mtp.Unions))
+	if unions != 672 || len(mtp.Unions) != 26 {
+		t.Fatalf("planned unions = %d (%d MTProto), want 672 (26 MTProto)", unions, len(mtp.Unions))
 	}
 	for _, path := range []string{
 		"tl/api.go",
 		"tl/api_account.go",
 		"tl/api_messages.go",
 		"tl/api_synthetic.go",
+		"tl/api_toncenter.go",
+		"tl/api_wallet.go",
 		"tl/mtp.go",
 	} {
 		if _, exists := paths[path]; !exists {
